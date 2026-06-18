@@ -501,10 +501,85 @@ class PhotoAnalyzer:
         self.model = config.get("openai","model") or "gpt-4o-mini"
         self.google_api_key = config.get("google","maps_api_key") or ""
         from openai import OpenAI; self.client = OpenAI(api_key=self.api_key)
+        self._poi_cache = {}  # (round lat,lon) → best POI dict / None
         if self.google_api_key:
             logger.info("🗺️ Google Maps API 활성화")
         else:
             logger.info("🗺️ Google Maps API 없음 → Nominatim 사용")
+
+    # ── Places API(New) 기반 실제 상호명 해석 ──
+    def _vision_to_places_types(self, scene_type):
+        """Vision scene_type → Places primaryType 매칭용 키워드 목록 (없으면 [])"""
+        s = (scene_type or "").strip()
+        M = {
+            "카페": ["cafe", "bakery", "coffee_shop"],
+            "맛집": ["restaurant", "sandwich_shop", "ramen_restaurant", "japanese_restaurant", "cafe", "bakery"],
+            "음식": ["restaurant", "cafe"], "식당": ["restaurant"],
+            "관광지": ["tourist_attraction", "historical_landmark", "point_of_interest"],
+            "신사": ["place_of_worship", "shrine", "tourist_attraction"],
+            "사찰": ["place_of_worship", "buddhist_temple", "tourist_attraction"],
+            "거리": ["tourist_attraction", "point_of_interest"],
+            "시장": ["market", "supermarket", "store"],
+            "쇼핑": ["store", "shopping_mall", "department_store"],
+        }
+        for k, v in M.items():
+            if k in s:
+                return v
+        return []
+
+    def _pick_best_poi(self, candidates, scene_type, lat, lon):
+        """후보 POI 중 ① Vision 타입 일치 ② GPS 거리 가까운 순으로 최적 1개"""
+        if not candidates:
+            return None
+        keys = self._vision_to_places_types(scene_type)
+        def score(c):
+            pt = c.get("primaryType", "") or ""
+            match = any(k in pt for k in keys) if keys else False
+            try:
+                dist = TripStructurer._haversine(lat, lon, float(c["lat"]), float(c["lon"]))
+            except (TypeError, ValueError, KeyError):
+                dist = 9e9
+            return (0 if match else 1, dist)
+        return sorted(candidates, key=score)[0]
+
+    def _places_nearby(self, lat, lon, radius=150):
+        """Places API(New) searchNearby — 좌표 주변 POI 목록(한글)"""
+        if not self.google_api_key:
+            return []
+        body = json.dumps({
+            "maxResultCount": 10,
+            "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lon}, "radius": float(radius)}},
+            "languageCode": "ko",
+        }).encode()
+        req = urllib.request.Request(
+            "https://places.googleapis.com/v1/places:searchNearby",
+            data=body, method="POST",
+            headers={"Content-Type": "application/json", "X-Goog-Api-Key": self.google_api_key,
+                     "X-Goog-FieldMask": "places.displayName,places.primaryType,places.location,places.id"})
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                d = json.loads(resp.read().decode())
+            out = []
+            for p in d.get("places", []):
+                loc = p.get("location", {}) or {}
+                out.append({"name": (p.get("displayName") or {}).get("text", ""),
+                            "primaryType": p.get("primaryType", ""), "id": p.get("id", ""),
+                            "lat": loc.get("latitude"), "lon": loc.get("longitude")})
+            return [o for o in out if o["name"]]
+        except Exception as e:
+            logger.warning(f"  ⚠️ Places 조회 실패: {e}")
+            return []
+
+    def _resolve_poi_name(self, lat, lon, scene_type):
+        """좌표→실제 상호명 해석(타입 랭킹 + GPS 반올림 캐시). 실패 시 None."""
+        ck = (round(lat, 4), round(lon, 4))
+        if ck in self._poi_cache:
+            return self._poi_cache[ck]
+        best = self._pick_best_poi(self._places_nearby(lat, lon), scene_type, lat, lon)
+        self._poi_cache[ck] = best
+        if best:
+            logger.info(f"  🏪 POI: {best['name']} ({best['primaryType']})")
+        return best
 
     def scan_folder(self, folder_path):
         """폴더 및 하위 폴더에서 모든 이미지 파일 검색"""
@@ -565,14 +640,22 @@ class PhotoAnalyzer:
                     if visible_name:
                         # 간판이 보임 → 간판 이름 우선
                         r["location_name"] = visible_name
+                        r["poi_resolved"] = True
                     elif gps_is_poi:
                         # Google이 시설명 찾음 → 그대로 사용
                         r["location_name"] = gps_location
+                        r["poi_resolved"] = True
                     else:
-                        # 주소만 나옴 → Vision scene_type으로 의미있는 이름 생성
-                        # "사가 [신사]" → "사가 신사", "에키미나미 [맛집]" → "사가역 주변"
-                        r["location_name"] = self._make_place_name(
-                            gps_location, gps_local, scene_type)
+                        # 주소만 나옴 → Places API로 실제 상호 조회, 실패 시 동네명 폴백
+                        poi = self._resolve_poi_name(exif["lat"], exif["lon"], scene_type) if r.get("gps") else None
+                        if poi:
+                            r["location_name"] = poi["name"]
+                            r["poi_id"] = poi.get("id", "")
+                            r["poi_resolved"] = True
+                        else:
+                            r["location_name"] = self._make_place_name(
+                                gps_location, gps_local, scene_type)
+                            r["poi_resolved"] = False
 
                     r["location_name_local"] = gps_local
                     if scene_type:
@@ -594,6 +677,8 @@ class PhotoAnalyzer:
         # ── 배치 한글 변환 (외국어 장소명 모아서 1번 AI 호출) ──
         foreign_items = []
         for i, r in enumerate(results):
+            if r.get("poi_resolved"):
+                continue  # Places가 한글 상호명 반환(예 "샌드위치 팩토리 OCM") → 번역 스킵
             name = r.get("location_name","")
             if name and self._has_foreign_chars(name):
                 foreign_items.append((i, name, r.get("location_name_local","")))
@@ -1312,6 +1397,24 @@ class TripStructurer:
         return groups
 
     @staticmethod
+    def segment_index(places_meta):
+        """[(region, date)] 순서 입력 → 일정(세그먼트) id 리스트.
+        지역(도시) 또는 날짜가 바뀌면 새 세그먼트. 같은 도시·같은 날이면
+        거리가 멀어도 한 일정(예: 교토 은각사/금각사/후시미=1세그먼트).
+        region/date가 빈 값이면 경계로 치지 않음(이어붙임)."""
+        ids = []
+        cur = 0
+        for i, (reg, day) in enumerate(places_meta):
+            if i == 0:
+                ids.append(0)
+                continue
+            preg, pday = places_meta[i - 1]
+            if (reg and preg and reg != preg) or (day and pday and day != pday):
+                cur += 1
+            ids.append(cur)
+        return ids
+
+    @staticmethod
     def _haversine(lat1, lon1, lat2, lon2):
         """두 GPS 좌표 간 거리 (미터)"""
         import math
@@ -1676,6 +1779,11 @@ class TravelBlogGenerator:
 ★★★ 위 장소 목록의 순서대로, 각 장소별로 섹션을 만들어 글을 작성하세요 ★★★
 같은 장소의 사진은 해당 장소 섹션에 모두 포함해야 합니다.
 
+★★★ 장소명 규칙(필수) ★★★
+- 위 [방문 장소 목록]에 있는 이름만 사용하세요.
+- 목록에 없는 새 가게/상호명을 절대 지어내지 마세요. (예: 목록에 없는 "둥부르","두번" 같은 이름 생성 금지)
+- <h2 data-place="..."> 의 장소명은 목록의 이름과 정확히 일치해야 합니다.
+
 [장소별 특징 소개 (검색 결과 — 글에 자연스럽게 반영하세요)]:
 {place_intros if place_intros else "(검색 결과 없음 — 사진 데이터만으로 작성)"}
 
@@ -1770,6 +1878,7 @@ class TravelBlogGenerator:
 1. ★★★ 장소명 규칙 ★★★
    - 반드시 "한글이름 (현지어)" 형식: 예) 시노자키 신사 (篠崎神社)
    - 로마자 절대 금지! Matsubara(X) → 마쓰바라(O)
+   - [방문 장소 목록]에 없는 상호명을 새로 지어내지 마세요. 목록의 이름만 사용.
 
 2. 말투: 친근한 구어체 "~했어요","~더라고요", 센스있는 표현
 
@@ -1976,6 +2085,7 @@ class TravelBlogGenerator:
 
         from collections import OrderedDict
         places = OrderedDict()
+        place_photos = {}  # loc → [photos] (세그먼트 판정용)
         # 장소별 마지막 사진의 EXIF 시간 수집 (출발 시간 추정용)
         place_last_time = {}
         for r in photos:
@@ -1986,6 +2096,7 @@ class TravelBlogGenerator:
                     places[loc] = gps
             # 해당 장소의 가장 마지막 사진 시간 기록
             if loc:
+                place_photos.setdefault(loc, []).append(r)
                 exif_dt = r.get("exif_date", "") or (r.get("gps", {}) or {}).get("date", "")
                 if exif_dt:
                     place_last_time[loc] = exif_dt
@@ -1999,6 +2110,9 @@ class TravelBlogGenerator:
         for i in range(len(place_names) - 1):
             fr_name, to_name = place_names[i], place_names[i + 1]
             fr_gps, to_gps = places[fr_name], places[to_name]
+            # 같은 일정(지역+날짜) 내부 → Directions 호출 스킵(경로 생략됨)
+            if self._same_segment(place_photos.get(fr_name), place_photos.get(to_name)):
+                continue
             route_key = f"{fr_name}→{to_name}"
             travel_mode = route_modes.get(route_key, "transit")
 
@@ -2108,8 +2222,26 @@ class TravelBlogGenerator:
 
         return route_data
 
+    def _place_seg(self, photos):
+        """장소(사진 묶음)의 일정 키 (한글 지역, 날짜). 없으면 ('','')."""
+        for p in photos or []:
+            reg = p.get("city") or p.get("region") or ""
+            day = p.get("day_date") or (p.get("exif_date", "") or "")[:10]
+            if reg or day:
+                return (self._koreanize_region(reg) if reg else "", day)
+        return ("", "")
+
+    def _same_segment(self, from_photos, to_photos):
+        """두 장소가 같은 일정(지역+날짜)인지. 정보 부족 시 False(=경로 표시)."""
+        fr = self._place_seg(from_photos)
+        to = self._place_seg(to_photos)
+        if fr == ("", "") or to == ("", ""):
+            return False
+        return fr == to
+
     def _insert_route_guides(self, content, place_groups):
-        """장소→장소 사이에 이동 경로 카드 + 경로 지도 삽입"""
+        """장소→장소 사이에 이동 경로 카드 삽입.
+        같은 일정(세그먼트) 내부 이동은 생략, 세그먼트 경계(지역/날짜 이동)만 표시."""
         import re as _re
         places = list(place_groups.keys())
         if len(places) < 2:
@@ -2131,6 +2263,10 @@ class TravelBlogGenerator:
             to_place = places[i]
             from_photos = place_groups[from_place]
             to_photos = place_groups[to_place]
+
+            # 같은 일정(지역+날짜) 내부 이동 → 경로 카드 생략
+            if self._same_segment(from_photos, to_photos):
+                continue
 
             rd = route_data.get((from_place, to_place))
             route_key = f"{from_place}→{to_place}"
