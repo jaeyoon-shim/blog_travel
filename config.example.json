@@ -1,0 +1,36 @@
+{
+  "openai": {
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "model": "gpt-4o-mini",
+    "temperature": 0.7,
+    "max_tokens": 3000
+  },
+  "unsplash": {
+    "access_key": "YOUR_UNSPLASH_ACCESS_KEY"
+  },
+  "tistory": {
+    "enabled": true,
+    "app_id": "YOUR_TISTORY_APP_ID",
+    "secret_key": "YOUR_TISTORY_SECRET_KEY",
+    "access_token": "YOUR_TISTORY_ACCESS_TOKEN",
+    "blog_name": "YOUR_BLOG_NAME",
+    "visibility": 3,
+    "category_id": 0
+  },
+  "naver": {
+    "enabled": true,
+    "username": "YOUR_NAVER_ID",
+    "password": "YOUR_NAVER_PASSWORD",
+    "blog_id": "YOUR_NAVER_BLOG_ID",
+    "use_selenium": true
+  },
+  "settings": {
+    "delay_between_posts": 60,
+    "include_images": true,
+    "images_per_post": 2,
+    "language": "ko",
+    "post_length": "long",
+    "auto_hashtags": true,
+    "save_locally": true
+  }
+}

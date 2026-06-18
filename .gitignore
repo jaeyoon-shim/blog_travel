@@ -1,0 +1,37 @@
+# API 키가 포함된 파일 (절대 업로드 금지!)
+.env
+config.json
+
+# 로그 파일
+*.log
+logs/
+
+# 생성된 포스트 & 이미지
+posts/
+images/
+
+# 대용량/민감 데이터 (절대 업로드 금지!)
+# uploads/ = 업로드된 여행 사진(수백 MB)
+# selenium_profile/ = 크롬 프로필, 네이버 로그인 세션 포함(민감)
+uploads/
+selenium_profile/
+*.zip
+files*/
+*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 기타 잡파일
+⚠️
+settings.json
+uploads.zip
