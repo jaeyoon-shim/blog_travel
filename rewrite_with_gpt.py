@@ -120,23 +120,35 @@ def rewrite_draft(input_path, output_path):
     """main_step3.py 등에서 호출하는 통합 리라이팅 함수"""
     from pathlib import Path
     import json
-    
+    import re
+
     input_path = Path(input_path)
     output_path = Path(output_path)
-    
+
     if not input_path.exists():
         print(f"❌ 오류: 입력 파일 {input_path}이 없습니다.")
         return
 
-    # metadata.json에서 지역 정보 가져오기 (가장 많이 나타나는 지역 기준)
-    region = "기타큐슈" # 기본값
+    # metadata.json에서 지역 정보 가져오기
+    region = "일본 여행" # 기본값
     try:
         with open("metadata.json", "r", encoding="utf-8") as f:
             metadata = json.load(f)
-            regions = [item['region'] for item in metadata if item['region'] != "지역 미정"]
+            # '지역 미정' 및 '위치 정보 오류' 필터링
+            exclude_terms = ["지역 미정", "위치 정보 오류", "장소 미정", "위치 정보 미정"]
+            regions = [item['region'] for item in metadata if item['region'] not in exclude_terms]
+
             if regions:
                 from collections import Counter
                 region = Counter(regions).most_common(1)[0][0]
+            else:
+                # 메타데이터에 지역 정보가 없으면 사진 파일 경로에서 폴더명 추출 시도
+                first_file = metadata[0]['file'] if metadata else ""
+                if first_file:
+                    # 폴더 구조에서 지역명으로 추측되는 단어 추출 (예: '2024.05 사가' -> '사가')
+                    match = re.search(r'([가-힣]{2,})', Path(first_file).parent.name)
+                    if match:
+                        region = match.group(1)
     except:
         pass
 
@@ -148,5 +160,5 @@ def rewrite_draft(input_path, output_path):
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(final_post)
-    
+
     return final_post
