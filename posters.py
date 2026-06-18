@@ -1279,44 +1279,67 @@ class NaverSeleniumPoster(_SeleniumBase):
             self._screenshot("error")
             return {"success": False, "reason": str(e)}
 
-    def _try_login(self):
-        """selenium_profile에 저장된 쿠키로 자동 로그인 시도"""
+    def _is_login_page(self):
+        """현재 네이버 로그인 페이지에 머물러 있는지"""
+        try:
+            u = self.driver.current_url or ""
+        except Exception:
+            return False
+        return ("nidlogin" in u) or ("nid.naver.com" in u) or ("/login" in u.lower())
+
+    def _try_login(self, manual_wait=180):
+        """자동 로그인 시도 후, 막히면 수동 로그인 폴백.
+
+        네이버는 자동 로그인을 자주 차단한다(보안문자/신규기기/2단계 — URL에
+        'captcha'가 안 떠도 페이지에서 막힘). 자동 로그인이 로그인 페이지를
+        벗어나지 못하면 사용자가 브라우저에서 직접 로그인하도록 대기한다.
+        한 번 로그인하면 selenium_profile에 세션이 저장돼 다음 실행부터는 생략.
+        """
         import pyperclip
         from selenium.webdriver.common.by import By
         from selenium.webdriver.common.keys import Keys
 
         nid = os.environ.get("NAVER_USERNAME", "")
         npw = os.environ.get("NAVER_PASSWORD", "")
-        if not nid or not npw:
-            logger.warning("  .env에 NAVER_USERNAME/NAVER_PASSWORD 없음 → 수동 로그인 필요")
-            self._screenshot("need_login")
-            print("\n" + "="*50)
-            print("  네이버 로그인이 필요합니다! 브라우저에서 직접 로그인 (90초)")
-            print("="*50 + "\n")
-            time.sleep(90)
-            return
 
-        try:
-            el = self.driver.find_element(By.CSS_SELECTOR, "#id")
-            el.click(); time.sleep(0.5)
-            pyperclip.copy(nid)
-            el.send_keys(Keys.CONTROL, 'v'); time.sleep(1)
+        # 1) 자격증명이 있으면 자동 로그인 입력 시도
+        if nid and npw:
+            try:
+                el = self.driver.find_element(By.CSS_SELECTOR, "#id")
+                el.click(); time.sleep(0.5)
+                pyperclip.copy(nid)
+                el.send_keys(Keys.CONTROL, 'v'); time.sleep(1)
 
-            pw = self.driver.find_element(By.CSS_SELECTOR, "#pw")
-            pw.click(); time.sleep(0.5)
-            pyperclip.copy(npw)
-            pw.send_keys(Keys.CONTROL, 'v'); time.sleep(1)
+                pw = self.driver.find_element(By.CSS_SELECTOR, "#pw")
+                pw.click(); time.sleep(0.5)
+                pyperclip.copy(npw)
+                pw.send_keys(Keys.CONTROL, 'v'); time.sleep(1)
 
-            for s in ["#log\\.login", ".btn_login", "#btn_login"]:
-                try: self.driver.find_element(By.CSS_SELECTOR, s).click(); break
-                except: continue
-            time.sleep(3)
+                for s in ["#log\\.login", ".btn_login", "#btn_login"]:
+                    try: self.driver.find_element(By.CSS_SELECTOR, s).click(); break
+                    except: continue
+                time.sleep(3)
+            except Exception as e:
+                logger.warning(f"  자동 로그인 입력 실패: {e}")
 
-            if "captcha" in self.driver.current_url or "2step" in self.driver.current_url:
-                print("  ⚠️ 캡차/2단계 인증 → 브라우저에서 완료 (90초)")
-                time.sleep(90)
-        except Exception as e:
-            logger.warning(f"  자동 로그인 실패: {e}")
+        # 2) 아직 로그인 페이지면 → 수동 로그인 대기 (보안문자/2단계/신규기기 포함)
+        if self._is_login_page():
+            self._screenshot("need_manual_login")
+            print("\n" + "=" * 56)
+            print("  ⚠️ 자동 로그인이 막혔습니다(네이버 보안).")
+            print("     브라우저 창에서 직접 로그인을 완료해 주세요.")
+            print(f"     (최대 {manual_wait}초 대기 — 로그인되면 자동 진행)")
+            print("     한 번 로그인하면 세션이 저장되어 다음엔 생략됩니다.")
+            print("=" * 56 + "\n")
+            deadline = time.time() + manual_wait
+            while time.time() < deadline:
+                time.sleep(3)
+                if not self._is_login_page():
+                    logger.info("  ✅ 로그인 완료 감지")
+                    time.sleep(2)
+                    break
+            else:
+                logger.warning("  ⏱️ 수동 로그인 시간 초과")
 
     def _generate_route_images(self, blocks):
         """route 블록의 경로 이미지 사전 생성"""
