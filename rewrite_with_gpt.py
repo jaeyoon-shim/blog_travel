@@ -6,6 +6,39 @@ from collections import defaultdict
 
 client = OpenAI(api_key=config.OPENAI_API_KEY)
 
+def get_reference_style(url):
+    """참고 URL에서 문체 샘플 추출"""
+    if not url:
+        return "다정한 구어체 (~했어요, ~였답니다)"
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    try:
+        # 네이버 블로그 특수 처리
+        if "blog.naver.com" in url:
+            if "PostView" not in url:
+                res = requests.get(url, headers=headers, timeout=5)
+                soup = BeautifulSoup(res.text, 'html.parser')
+                iframe = soup.find('iframe', id='mainFrame')
+                if iframe:
+                    url = "https://blog.naver.com" + iframe['src']
+            
+            res = requests.get(url, headers=headers, timeout=5)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            content = soup.select_one('.se-main-container') or soup.select_one('#postViewArea')
+            text = content.get_text(separator=' ', strip=True) if content else soup.get_text()
+        else:
+            res = requests.get(url, headers=headers, timeout=5)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            text = soup.get_text(separator=' ', strip=True)
+            
+        return text[:1500] # 문체 분석을 위해 충분한 양 추출
+    except Exception as e:
+        print(f"⚠️ 문체 분석용 페이지 접속 실패: {e}")
+        return "다정한 구어체 (~했어요, ~였답니다)"
+
 def get_wiki_info(region):
     """특정 지역에 대한 핵심 위키 정보 생성 (요약, 특산물, 명물, 관광지)"""
     prompt = f"""
@@ -87,8 +120,15 @@ def final_rewrite_step3(raw_draft, region):
     seo_info = analyze_naver_structure(region)
     wiki_info = get_wiki_info(region)
     
+    # [추가] 참고 문체 분석 (config.REFERENCE_URL 사용)
+    style_sample = get_reference_style(config.REFERENCE_URL)
+    
     prompt = f"""
     당신은 네이버 블로그 여행 인플루언서입니다. 제공된 초안을 바탕으로 '상위 10개 블로그의 구성'을 모방하여 최종 원고를 작성하세요.
+    특히, 아래 [참고 문체 스타일]을 분석하여 말투, 종결어미, 단어 선택 등을 최대한 비슷하게 복제하여 작성해 주세요.
+
+    [참고 문체 스타일]
+    {style_sample}
 
     [포스팅 구성 가이드]
     1. 최상단: {region} 위키 정보 섹션 (제공된 wiki_info 활용)
@@ -110,7 +150,7 @@ def final_rewrite_step3(raw_draft, region):
 
     response = client.chat.completions.create(
         model=config.MODEL_NAME,
-        messages=[{"role": "system", "content": "다정한 구어체(~했어요)를 사용하며 네이버 블로그 최적화 구성을 잘 지키는 인플루언서입니다."},
+        messages=[{"role": "system", "content": "제공된 참고 문체를 완벽하게 모방하여 작성하는 네이버 블로그 여행 전문 작가입니다."},
                   {"role": "user", "content": prompt}],
         temperature=0.8
     )

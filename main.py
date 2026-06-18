@@ -89,14 +89,15 @@ def upload_post(title, content):
             except:
                 pass
 
-        # 5. 제목 입력 (더 견고한 선택자 사용)
+        # 5. 제목 입력 및 본문으로 이동 (Tab 활용)
         print(f"📝 제목 입력 시작: {title[:10]}...")
         cmd_key = Keys.COMMAND if os.name == 'posix' else Keys.CONTROL
         try:
+            # 제목 영역 클릭 시도
             title_selectors = [
                 (By.CSS_SELECTOR, ".se-documentTitle .se-bare-textarea"),
                 (By.XPATH, "//textarea[contains(@placeholder, '제목')]"),
-                (By.XPATH, "//span[contains(text(), '제목')]/..")
+                (By.CSS_SELECTOR, ".se-placeholder.se-ff-nanumbarungothic") # 제목 플레이스홀더
             ]
             
             title_element = None
@@ -109,62 +110,71 @@ def upload_post(title, content):
             if title_element:
                 title_element.click()
                 time.sleep(1)
+                
+                # 제목 입력
                 pyperclip.copy(title)
                 ActionChains(driver).key_down(cmd_key).send_keys('v').key_up(cmd_key).perform()
                 print("✅ 제목 입력 완료")
-            else:
-                raise Exception("제목 입력 영역을 찾을 수 없습니다.")
-        except Exception as e:
-            print(f"⚠️ 제목 입력 실패: {e}")
-
-        # 6. 본문 입력
-        print("📝 본문 입력 중...")
-        try:
-            content_selectors = [
-                (By.CSS_SELECTOR, ".se-main-container"),
-                (By.CSS_SELECTOR, ".se-content"),
-                (By.CSS_SELECTOR, ".se-component-content")
-            ]
-            content_area = None
-            for selector in content_selectors:
-                try:
-                    content_area = driver.find_element(*selector)
-                    if content_area: break
-                except: continue
-            
-            if content_area:
-                content_area.click()
                 time.sleep(1)
+                
+                # Tab 키를 눌러 본문 영역으로 이동 (가장 확실함)
+                print("⌨️ Tab 키로 본문 이동 중...")
+                ActionChains(driver).send_keys(Keys.TAB).perform()
+                time.sleep(1)
+                
+                # 기존 내용 삭제 (Ctrl+A -> Backspace)
+                ActionChains(driver).key_down(cmd_key).send_keys('a').key_up(cmd_key).send_keys(Keys.BACKSPACE).perform()
+                time.sleep(1)
+                
+                # 본문 입력
+                print("📝 본문 내용 붙여넣기 중...")
                 pyperclip.copy(content)
                 ActionChains(driver).key_down(cmd_key).send_keys('v').key_up(cmd_key).perform()
                 print("✅ 본문 입력 완료")
                 time.sleep(3)
             else:
-                print("⚠️ 본문 입력 영역을 찾지 못했습니다.")
+                raise Exception("제목 영역을 찾을 수 없습니다.")
         except Exception as e:
-            print(f"⚠️ 본문 입력 실패: {e}")
+            print(f"⚠️ 에디터 입력 실패: {e}")
 
-        # 7. 발행 버튼 클릭 (중요: iframe 밖으로 빠져나가야 함)
-        print("🚀 발행 버튼 클릭 시도...")
+        # 7. 발행 버튼 클릭 (iframe 밖으로 빠져나가야 함)
+        print("🚀 발행 프로세스 시작...")
         driver.switch_to.default_content() # iframe 탈출
         time.sleep(1)
         
         try:
-            # 발행 버튼 클릭
-            publish_btn = driver.find_element(By.CLASS_NAME, "publish_btn")
-            publish_btn.click()
-            time.sleep(2)
+            # 1) '발행' 버튼 찾기 및 클릭
+            publish_selectors = [
+                (By.CLASS_NAME, "publish_btn"),
+                (By.XPATH, "//button[contains(., '발행')]"),
+                (By.CSS_SELECTOR, "button.publish_btn")
+            ]
             
-            # 최종 확인 버튼 클릭
-            confirm_btn = driver.find_element(By.CLASS_NAME, "confirm_btn")
-            confirm_btn.click()
+            publish_btn = None
+            for selector in publish_selectors:
+                try:
+                    publish_btn = driver.find_element(*selector)
+                    if publish_btn: break
+                except: continue
+                
+            if publish_btn:
+                publish_btn.click()
+                print("✅ 1단계 발행 버튼 클릭 완료")
+                time.sleep(2)
+                
+                # 2) 최종 '발행' 버튼 클릭 (팝업 내)
+                confirm_btn = driver.find_element(By.XPATH, "//button[contains(@class, 'confirm_btn') or contains(., '발행')]")
+                confirm_btn.click()
+                print("✅ 최종 발행 완료!")
+            else:
+                print("⚠️ 발행 버튼을 찾지 못했습니다. 수동으로 눌러주세요.")
             
-            print("✅ 블로그 포스팅 완료! (5초 후 종료됩니다)")
+            print("✨ 모든 작업이 완료되었습니다! (5초 후 종료)")
             time.sleep(5)
         except Exception as e:
-            print(f"❌ 발행 버튼 클릭 실패: {e}")
-            print("💡 수동으로 '발행' 버튼을 눌러주세요.")
-            time.sleep(10) # 수동 조치 시간 제공
+            print(f"❌ 최종 발행 중 오류: {e}")
+            print("💡 본문은 입력되었으니 수동으로 '발행' 버튼을 눌러 마무리해주세요.")
+            time.sleep(10)
 
     except Exception as e:
         print(f"❌ 업로드 중 에러 발생: {e}")
