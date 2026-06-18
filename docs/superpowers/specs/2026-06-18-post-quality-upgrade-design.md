@@ -34,11 +34,10 @@
 
 2026-06-18 실측:
 - ✅ Geocoding API: 활성 (현재 GPS→주소 동작)
-- ❌ Places API (legacy): `REQUEST_DENIED` — "legacy API not enabled"
-- ❌ Places API (New) `searchNearby`: HTTP 403 `API_KEY_SERVICE_BLOCKED`
-- ❌ Directions API: `REQUEST_DENIED` (경로 조회)
+- ✅ **Places API (New) `searchNearby`: 활성·검증 완료** (키 제한에 추가 후). 우오마치 좌표에서 실제 상호 10건 한글 반환(예: "샌드위치 팩토리 OCM"/sandwich_shop, "스케상우동 우오마치점"). **languageCode=ko로 한글 직접 반환 → 별도 번역 불필요.**
+- ❌ Directions API: `REQUEST_DENIED` (경로 *지도 이미지*용 — 본 작업은 경로 위치 판정만 하므로 불필요)
 
-→ 매장명 자동 정확화 풀가동에는 **사용자 액션 필요**(§7).
+→ 매장명 자동 정확화 즉시 가동 가능.
 
 ---
 
@@ -51,9 +50,10 @@
 - **처리**: Places API (New) `places:searchNearby`
   - endpoint: `POST https://places.googleapis.com/v1/places:searchNearby`
   - header: `X-Goog-Api-Key`, `X-Goog-FieldMask: places.displayName,places.primaryType,places.location,places.id`
-  - body: `locationRestriction.circle`(반경 100m), `includedTypes`(scene_type→Places type 매핑), `maxResultCount: 8`, `languageCode: "ko"`
-  - 선택: 가장 가까운(거리) 결과 중 scene_type 타입 일치 우선.
-- **출력**: `{poi_name, poi_id, poi_type, poi_resolved: True}` 또는 실패 시 `None`.
+  - body: `locationRestriction.circle`(반경 100~150m), `includedTypes`(scene_type→Places type 매핑), `maxResultCount: 10`, `languageCode: "ko"`
+  - FieldMask: `places.displayName,places.primaryType,places.location,places.id`
+- **선택(랭킹) 로직**: 후보 중 **① Vision scene_type ↔ Places primaryType 일치** 우선, 그 다음 **② GPS 거리 가까운 순**. 매핑 예: 카페→{cafe, bakery, coffee_shop}, 맛집/음식→{restaurant, *_restaurant, sandwich_shop, izakaya}, 관광지→{tourist_attraction, point_of_interest}, 쇼핑→{store, shopping_mall, discount_store}. 일치 후보 없으면 최근접 POI.
+- **출력**: `{poi_name, poi_id, poi_type, poi_resolved: True}` 또는 실패 시 `None`. displayName이 한글이므로 `_translate_to_korean` 불필요.
 - **캐시**: GPS 소수 4자리 반올림 키로 세션 캐시(같은 좌표 중복 호출 방지).
 - **Fallback**: API 차단/결과없음/예외 → 기존 동네명 기반 이름 유지 + `poi_resolved=False` 플래그를 photo_result에 기록.
 
@@ -142,10 +142,10 @@ generate_drafts
 
 ## 7. 의존성 & 사용자 액션 (Dependencies)
 
-- **선택(매장명 풀가동용)**: Google Cloud Console에서
-  1. **Places API (New)** 활성화
-  2. 해당 API 키의 **API 제한**에 Places API (New) 추가(또는 제한 해제)
-- 미적용 시: ③④는 그대로 작동(헛경로·가짜이름 제거), 매장명은 동네명 안전 폴백.
+- ✅ **완료(2026-06-18)**: Places API (New) 활성화 + API 키 제한에 추가 → 실측 통과. 코드는 기존 `.env`의 `GOOGLE_MAPS_API_KEY`를 `X-Goog-Api-Key`로 사용.
+- 비용 통제: GPS 반올림 캐시로 "장소 수"만큼만 호출. 콘솔 Budgets/Quota 권장.
+- (보안) 키가 채팅에 노출됨 → 작업 후 키 재발급 권장.
+- 폴백은 그대로 유지: 향후 차단/오류/결과없음 시 동네명 폴백 + `poi_resolved=False`.
 
 ## 8. 범위 밖 (Out of Scope)
 - 본문 사진 설명/장소 소개 묘사 품질 개선
