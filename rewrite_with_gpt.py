@@ -6,6 +6,28 @@ from collections import defaultdict
 
 client = OpenAI(api_key=config.OPENAI_API_KEY)
 
+def get_wiki_info(region):
+    """특정 지역에 대한 핵심 위키 정보 생성 (요약, 특산물, 명물, 관광지)"""
+    prompt = f"""
+    {region}에 대한 핵심 여행 정보를 다음 형식으로 정리해 주세요.
+    결과는 반드시 한국어로 작성하고, 네이버 블로그 포스팅 최상단에 들어갈 정보성 박스임을 고려하세요.
+
+    [형식]
+    ### 📍 {region} 여행 전 꼭 알아야 할 핵심 정보
+    - **지역 소개**: (5줄 내외의 요약 설명)
+    - **주요 특산품/특산물**: (대표적인 것 3-5개)
+    - **명물/추천 먹거리**: (꼭 먹어봐야 할 음식 3-5개)
+    - **대표 관광지**: (가장 유명한 명소 3-5개)
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": "친절한 여행 백과사전이자 가이드입니다."},
+                  {"role": "user", "content": prompt}],
+        temperature=0.5
+    )
+    return response.choices[0].message.content
+
 def analyze_naver_structure(region):
     """네이버 상위 블로그의 제목 및 포스팅 구성 패턴 분석"""
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -19,7 +41,7 @@ def analyze_naver_structure(region):
         # 기획안에 따른 권장 구성 가이드 주입
         structure_hint = f"""
         [상위 노출 제목 패턴]: {', '.join(titles)}
-        [권장 구성]: 제목 -> 여행 경로 요약(지도) -> 장소별 [사진+글] 반복 -> 마무리 총평/팁
+        [권장 구성]: 지역 소개(위키) -> 제목 -> 도입부 -> 여행 경로 요약(지도) -> 장소별 [사진+글] 반복 -> 동영상/꿀팁 -> 마무리 총평
         """
         return structure_hint
     except:
@@ -63,18 +85,24 @@ def draft_step2_logic(metadata_items):
 def final_rewrite_step3(raw_draft, region):
     """네이버 블로그 상위 10개 구성 모방 및 최종 문체 적용"""
     seo_info = analyze_naver_structure(region)
+    wiki_info = get_wiki_info(region)
     
     prompt = f"""
     당신은 네이버 블로그 여행 인플루언서입니다. 제공된 초안을 바탕으로 '상위 10개 블로그의 구성'을 모방하여 최종 원고를 작성하세요.
 
     [포스팅 구성 가이드]
-    - 도입부: 여행의 동기와 설레는 감정 전달
-    - 요약 섹션: 이번 {region} 여행의 전체 경로를 한눈에 보여주는 텍스트 요약
-    - 본문: [사진:파일명] -> 해당 사진에 대한 다정한 설명 -> [장소 지도 정보] 형태의 흐름 유지
-    - 마무리: 여행 꿀팁과 다음 여행을 기약하는 인사
+    1. 최상단: {region} 위키 정보 섹션 (제공된 wiki_info 활용)
+    2. 도입부: 여행의 동기와 설레는 감정 전달
+    3. 요약 섹션: 이번 {region} 여행의 전체 경로를 한눈에 보여주는 텍스트 요약
+    4. 본문: [사진:파일명] -> 해당 사진에 대한 다정한 설명 -> [장소 지도 정보] 형태의 흐름 유지 (최소 5회 이상 반복)
+    5. 중간/후반: [동영상 삽입 위치 추천] - 여행의 현장감을 느낄 수 있는 동영상을 넣으면 좋은 위치에 표시
+    6. 마무리: 여행 꿀팁과 다음 여행을 기약하는 인사
 
     [SEO 및 구성 데이터]
     {seo_info}
+
+    [지역 위키 정보]
+    {wiki_info}
 
     [초안 내용]
     {raw_draft}
@@ -87,3 +115,38 @@ def final_rewrite_step3(raw_draft, region):
         temperature=0.8
     )
     return response.choices[0].message.content
+
+def rewrite_draft(input_path, output_path):
+    """main_step3.py 등에서 호출하는 통합 리라이팅 함수"""
+    from pathlib import Path
+    import json
+    
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    
+    if not input_path.exists():
+        print(f"❌ 오류: 입력 파일 {input_path}이 없습니다.")
+        return
+
+    # metadata.json에서 지역 정보 가져오기 (가장 많이 나타나는 지역 기준)
+    region = "기타큐슈" # 기본값
+    try:
+        with open("metadata.json", "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+            regions = [item['region'] for item in metadata if item['region'] != "지역 미정"]
+            if regions:
+                from collections import Counter
+                region = Counter(regions).most_common(1)[0][0]
+    except:
+        pass
+
+    with open(input_path, "r", encoding="utf-8") as f:
+        raw_draft = f.read()
+
+    print(f"📝 {region} 기반으로 최종 원고 생성 중...")
+    final_post = final_rewrite_step3(raw_draft, region)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(final_post)
+    
+    return final_post
