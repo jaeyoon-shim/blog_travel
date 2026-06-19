@@ -570,13 +570,39 @@ class PhotoAnalyzer:
             logger.warning(f"  ⚠️ Places 조회 실패: {e}")
             return []
 
-    def _resolve_poi_name(self, lat, lon, scene_type):
-        """좌표→실제 상호명 해석(타입 랭킹 + GPS 반올림 캐시). 실패 시 None."""
+    def _name_match(self, a, b):
+        """장소명 퍼지 일치 (공백/대소문자 무시, 부분일치 또는 글자겹침≥0.6)"""
+        if not a or not b:
+            return False
+        na = re.sub(r'\s+', '', a).lower()
+        nb = re.sub(r'\s+', '', b).lower()
+        if not na or not nb:
+            return False
+        if na in nb or nb in na:
+            return True
+        sa, sb = set(na), set(nb)
+        return len(sa & sb) / max(1, min(len(sa), len(sb))) >= 0.6
+
+    def _places_nearby_cached(self, lat, lon):
+        """좌표 주변 POI 후보(캐시) — GPS 반올림 키로 1회만 조회"""
         ck = (round(lat, 4), round(lon, 4))
-        if ck in self._poi_cache:
-            return self._poi_cache[ck]
-        best = self._pick_best_poi(self._places_nearby(lat, lon), scene_type, lat, lon)
-        self._poi_cache[ck] = best
+        if ck not in self._poi_cache:
+            self._poi_cache[ck] = self._places_nearby(lat, lon)
+        return self._poi_cache[ck]
+
+    def _resolve_poi(self, lat, lon, scene_type, visible_name=None):
+        """좌표→실제 상호. Places 후보(캐시) 중 ① visible_name 교차검증 일치 후보,
+        없으면 ② 타입↔거리 랭킹. 후보 없으면 None.
+        (환각 간판명은 후보와 불일치 → 무시됨)"""
+        cands = self._places_nearby_cached(lat, lon)
+        if not cands:
+            return None
+        if visible_name:
+            for c in cands:
+                if self._name_match(visible_name, c.get("name", "")):
+                    logger.info(f"  🏪 POI(간판일치): {c['name']}")
+                    return c
+        best = self._pick_best_poi(cands, scene_type, lat, lon)
         if best:
             logger.info(f"  🏪 POI: {best['name']} ({best['primaryType']})")
         return best
@@ -637,21 +663,21 @@ class PhotoAnalyzer:
                 visible_name = vision.get("visible_name","")
 
                 if gps_location:
-                    if visible_name:
-                        # 간판이 보임 → 간판 이름 우선
-                        r["location_name"] = visible_name
-                        r["poi_resolved"] = True
-                    elif gps_is_poi:
-                        # Google이 시설명 찾음 → 그대로 사용
+                    if gps_is_poi:
+                        # Google이 시설명 확인 → 신뢰 (간판읽기 무시)
                         r["location_name"] = gps_location
                         r["poi_resolved"] = True
                     else:
-                        # 주소만 나옴 → Places API로 실제 상호 조회, 실패 시 동네명 폴백
-                        poi = self._resolve_poi_name(exif["lat"], exif["lon"], scene_type) if r.get("gps") else None
+                        # Places 우선 + visible_name 교차검증 (환각 간판명 차단)
+                        poi = self._resolve_poi(exif["lat"], exif["lon"], scene_type, visible_name) if r.get("gps") else None
                         if poi:
                             r["location_name"] = poi["name"]
                             r["poi_id"] = poi.get("id", "")
                             r["poi_resolved"] = True
+                        elif visible_name:
+                            # Places 후보 없음 → 그나마 간판명 사용(미검증)
+                            r["location_name"] = visible_name
+                            r["poi_resolved"] = False
                         else:
                             r["location_name"] = self._make_place_name(
                                 gps_location, gps_local, scene_type)
@@ -1787,6 +1813,12 @@ class TravelBlogGenerator:
 [장소별 특징 소개 (검색 결과 — 글에 자연스럽게 반영하세요)]:
 {place_intros if place_intros else "(검색 결과 없음 — 사진 데이터만으로 작성)"}
 
+[묘사 원칙 — 반드시 지킬 것]
+- 사진에 실제로 보이는 것과 위 장소 정보만 묘사하세요. (제목 포함)
+- 확인할 수 없는 인테리어 분위기·재료 출처·메뉴 구성·영업 방식을 단정하지 마세요. 보이는 사실만.
+- 같은 형용사·문장을 여러 장소/사진에 반복하지 마세요. 각 장소·사진마다 새로운 표현으로.
+- 사진 설명은 그 사진의 구체적 장면을 오감으로 묘사(색·질감·맛·소리·온도). 다른 사진과 같은 문장 금지.
+
 [사진 참고 데이터]:
 {photo_summary}
 
@@ -1851,7 +1883,7 @@ class TravelBlogGenerator:
 
 (다음 장소의 (A)부터 반복...)
 
-3️⃣ 꿀팁 영역:
+3️⃣ 꿀팁 영역: (일반론 금지 — 장소 유형/사진 근거 기반 구체 팁만. 마땅치 않으면 2개로 줄이세요)
 <p style="text-align:center;color:#d4d4d4;letter-spacing:8px">─ ─ ─ ─ ─ ─ ─</p>
 <div style="text-align:center;padding:20px 0">
 <p style="font-size:0.8em;color:#8B9467;letter-spacing:3px">TRAVEL TIPS</p>
@@ -1922,7 +1954,7 @@ class TravelBlogGenerator:
             r = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role":"system","content":"인기 여행 블로거. 한글(현지어) 표기. JSON만 응답. 절대 구글맵 URL이나 이동경로 HTML을 넣지 마세요 - 자동 삽입됩니다."},
+                    {"role":"system","content":"인기 여행 블로거. 한글(현지어) 표기. JSON만 응답. 절대 구글맵 URL이나 이동경로 HTML을 넣지 마세요 - 자동 삽입됩니다. 사진에 보이는 사실과 제공된 장소 정보만 쓰고 확인 불가한 인테리어·재료·메뉴를 지어내지 마세요. 같은 형용사(아늑한/여유로운/편안한 등)를 반복하지 말고 장소마다 다르게 묘사하세요."},
                     {"role":"user","content":prompt}
                 ],
                 temperature=temperature, max_tokens=self.max_tok

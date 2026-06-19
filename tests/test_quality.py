@@ -32,18 +32,39 @@ def test_pick_best_poi_type_then_distance():
     assert pa._pick_best_poi([], "카페", 0, 0) is None
 
 
-# ── Task 4: 해석 캐시 + 랭킹 (Places HTTP는 monkeypatch) ──
-def test_resolve_uses_cache_and_ranking(monkeypatch):
+# ── 장소명 퍼지 일치 ──
+def test_name_match():
     pa = _pa()
-    monkeypatch.setattr(pa, "_places_nearby", lambda la, lo, radius=150: [
-        {"name": "샌드위치 팩토리 OCM", "primaryType": "sandwich_shop", "lat": 33.8837, "lon": 130.8799}])
-    r1 = pa._resolve_poi_name(33.883734, 130.879971, "맛집")
-    assert r1["name"] == "샌드위치 팩토리 OCM"
+    assert pa._name_match("Giraffe", "Giraffe Monochrome") is True
+    assert pa._name_match("기린 모노크롬", "기린모노크롬") is True
+    assert pa._name_match("뚜레쥬르", "Giraffe Monochrome") is False
+    assert pa._name_match("뚜레쥬르", "스케상우동 우오마치점") is False
+    assert pa._name_match("", "x") is False
 
-    def _boom(*a, **k):
-        raise AssertionError("캐시 미적중 — _places_nearby 재호출됨")
-    monkeypatch.setattr(pa, "_places_nearby", _boom)
-    assert pa._resolve_poi_name(33.883734, 130.879971, "맛집")["name"] == "샌드위치 팩토리 OCM"
+
+# ── Places 우선 + 간판 교차검증 + 후보 캐시 ──
+def test_resolve_poi_crosscheck_and_cache(monkeypatch):
+    pa = _pa()
+    cands = [
+        {"name": "Giraffe Monochrome", "primaryType": "restaurant", "lat": 33.8838, "lon": 130.8799},
+        {"name": "스케상우동 우오마치점", "primaryType": "japanese_restaurant", "lat": 33.8837, "lon": 130.8800},
+    ]
+    calls = {"n": 0}
+    def fake(la, lo, radius=150):
+        calls["n"] += 1
+        return list(cands)
+    monkeypatch.setattr(pa, "_places_nearby", fake)
+    # 환각 간판("뚜레쥬르") → 후보 불일치 → 무시하고 랭킹
+    r = pa._resolve_poi(33.883734, 130.879971, "맛집", visible_name="뚜레쥬르")
+    assert r["name"] in ("Giraffe Monochrome", "스케상우동 우오마치점")
+    # 간판이 후보와 일치 → 그 후보 채택
+    r2 = pa._resolve_poi(33.883734, 130.879971, "맛집", visible_name="스케상우동")
+    assert r2["name"] == "스케상우동 우오마치점"
+    # 같은 GPS → 후보 캐시 1회만 조회
+    assert calls["n"] == 1
+    # 후보 없음 → None
+    monkeypatch.setattr(pa, "_places_nearby", lambda *a, **k: [])
+    assert pa._resolve_poi(35.0, 135.0, "카페") is None
 
 
 # ── Task 5: 일정(세그먼트) 분할 ──
@@ -80,3 +101,12 @@ def test_prompt_has_no_invent_rule():
     style = {"name": "감성", "desc": "감성적"}
     p = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "")
     assert "지어내지" in p and "정확히 일치" in p
+
+
+def test_prompt_has_grounding_rules():
+    g = TravelBlogGenerator(Config())
+    photos = [{"location_name": "Giraffe Monochrome", "file_name": "a.jpg",
+               "gps": {"lat": 33.88, "lon": 130.87}}]
+    style = {"name": "감성", "desc": "감성적"}
+    p = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "")
+    assert "단정하지 마세요" in p and "반복하지 마세요" in p and "오감으로" in p
