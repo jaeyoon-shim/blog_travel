@@ -35,3 +35,7 @@ venv/
 ⚠️
 settings.json
 uploads.zip
+
+# E2E 테스트 임시 스캐폴딩
+_gen_test.py
+_test_cache/

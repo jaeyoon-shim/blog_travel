@@ -590,22 +590,18 @@ class PhotoAnalyzer:
             self._poi_cache[ck] = self._places_nearby(lat, lon)
         return self._poi_cache[ck]
 
-    def _resolve_poi(self, lat, lon, scene_type, visible_name=None):
-        """좌표→실제 상호. Places 후보(캐시) 중 ① visible_name 교차검증 일치 후보,
-        없으면 ② 타입↔거리 랭킹. 후보 없으면 None.
-        (환각 간판명은 후보와 불일치 → 무시됨)"""
-        cands = self._places_nearby_cached(lat, lon)
-        if not cands:
+    def _resolve_poi(self, lat, lon, scene_type=None, visible_name=None):
+        """신뢰 가능한 상호명만 반환: Vision 간판(visible_name)이 Places 후보와
+        일치할 때 그 후보를 반환(교차검증). 아니면 None.
+        GPS 최근접/타입 추측은 정확성을 보장 못 하므로 이름으로 쓰지 않는다
+        (호출부에서 중립 표기로 폴백). (_pick_best_poi/_vision_to_places_types는 향후용으로 유지)"""
+        if not visible_name:
             return None
-        if visible_name:
-            for c in cands:
-                if self._name_match(visible_name, c.get("name", "")):
-                    logger.info(f"  🏪 POI(간판일치): {c['name']}")
-                    return c
-        best = self._pick_best_poi(cands, scene_type, lat, lon)
-        if best:
-            logger.info(f"  🏪 POI: {best['name']} ({best['primaryType']})")
-        return best
+        for c in self._places_nearby_cached(lat, lon):
+            if self._name_match(visible_name, c.get("name", "")):
+                logger.info(f"  🏪 POI(간판검증): {c['name']}")
+                return c
+        return None
 
     def scan_folder(self, folder_path):
         """폴더 및 하위 폴더에서 모든 이미지 파일 검색"""
@@ -631,7 +627,8 @@ class PhotoAnalyzer:
             logger.info(f"📷 [{i+1}/{total}] {Path(p).name}")
 
             r = {"file_path":p,"file_name":Path(p).name,"gps":None,
-                 "location_name":"","location_name_local":"","vision":{},"exif_date":"","day_date":""}
+                 "location_name":"","location_name_local":"","vision":{},"exif_date":"","day_date":"",
+                 "poi_resolved":False,"name_confident":False}
 
             # ── STEP 1: EXIF GPS + 날짜 (무료) ──
             gps_location = ""
@@ -667,21 +664,21 @@ class PhotoAnalyzer:
                         # Google이 시설명 확인 → 신뢰 (간판읽기 무시)
                         r["location_name"] = gps_location
                         r["poi_resolved"] = True
+                        r["name_confident"] = True
                     else:
-                        # Places 우선 + visible_name 교차검증 (환각 간판명 차단)
+                        # 간판 교차검증 성공시에만 실명 신뢰, 아니면 중립 표기
                         poi = self._resolve_poi(exif["lat"], exif["lon"], scene_type, visible_name) if r.get("gps") else None
                         if poi:
                             r["location_name"] = poi["name"]
                             r["poi_id"] = poi.get("id", "")
                             r["poi_resolved"] = True
-                        elif visible_name:
-                            # Places 후보 없음 → 그나마 간판명 사용(미검증)
-                            r["location_name"] = visible_name
-                            r["poi_resolved"] = False
+                            r["name_confident"] = True
                         else:
+                            # 불확실 → 중립 표기 "{동네} {유형}" (사용자가 실명 입력)
                             r["location_name"] = self._make_place_name(
                                 gps_location, gps_local, scene_type)
                             r["poi_resolved"] = False
+                            r["name_confident"] = False
 
                     r["location_name_local"] = gps_local
                     if scene_type:
@@ -1045,9 +1042,19 @@ class PhotoAnalyzer:
 
         return result
 
+    @staticmethod
+    def _pick_admin(addr):
+        """Nominatim address dict → (city, region, country).
+        무료 모드에서 지역 감지/위키 박스가 동작하도록 행정구역을 추출한다."""
+        city = (addr.get("city") or addr.get("town") or addr.get("municipality")
+                or addr.get("county") or "")
+        region = (addr.get("province") or addr.get("state") or addr.get("region") or "")
+        country = addr.get("country", "")
+        return city, region, country
+
     def _nominatim_geocode(self, lat, lon):
         """Nominatim fallback (무료)"""
-        result = {"korean":"","local":"","is_poi":False}
+        result = {"korean":"","local":"","is_poi":False,"city":"","region":"","country":""}
         try:
             url19 = (f"https://nominatim.openstreetmap.org/reverse?"
                      f"format=json&lat={lat}&lon={lon}&zoom=19&accept-language=ko"
@@ -1060,6 +1067,9 @@ class PhotoAnalyzer:
             osm_class = data19.get("class","")
             osm_type = data19.get("type","")
             addr = data19.get("address",{})
+            # 무료 모드: 지역 위키 박스/지역 감지가 동작하도록 행정구역 채움
+            # (Google geocode 경로와 동일한 city/region/country 필드 제공)
+            result["city"], result["region"], result["country"] = self._pick_admin(addr)
             is_road = osm_class in ("highway","road") or osm_type in ("road","residential","tertiary","secondary","primary","unclassified","service")
 
             if name19 and not is_road:
@@ -1691,11 +1701,13 @@ class TravelBlogGenerator:
                 model=self.model,
                 messages=[
                     {"role": "system", "content":
-                        "친절한 여행 백과사전이자 가이드. 네이버 블로그 최상단 정보 박스용 데이터를 JSON으로만 응답."},
+                        "정확한 지역 백과사전. 확실히 아는 사실만 답하고, 불확실하면 항목을 비운다. "
+                        "해당 지역에 실제로 있는 것만 — 인접 현이나 다른 지역의 명소·특산품을 섞지 않는다. JSON으로만 응답."},
                     {"role": "user", "content":
                         f"'{region_hint}' 여행 전 꼭 알아야 할 핵심 정보를 아래 JSON 형식으로만 응답하세요.\n"
-                        f"모든 값은 한국어. specialties/foods/spots는 각 3~5개 항목의 배열.\n"
-                        '{"intro":"5줄 내외 지역 소개","specialties":["대표 특산품"],'
+                        f"모든 값은 한국어. specialties/foods/spots는 각 3~5개 배열.\n"
+                        f"반드시 '{region_hint}' 안에 실제로 있는 것만. 확실하지 않으면 그 배열을 비우거나 줄이세요(없는 것 채우기 금지).\n"
+                        '{"intro":"3~5줄 지역 소개(확실한 사실만)","specialties":["대표 특산품"],'
                         '"foods":["꼭 먹어봐야 할 음식"],"spots":["대표 관광지"]}'}
                 ],
                 max_tokens=500, temperature=0.6
@@ -1733,7 +1745,6 @@ class TravelBlogGenerator:
             box = (
                 '<div style="background:#f7f8f3;border:1px solid #e3e7d8;border-radius:12px;'
                 'padding:24px;margin:10px 0 24px">'
-                '<p style="text-align:center;font-size:0.8em;color:#8B9467;letter-spacing:3px;margin:0 0 12px">TRAVEL WIKI</p>'
                 f'<h3 style="text-align:center;font-size:1.15em;color:#3d3d3d;margin:0 0 16px;font-weight:600">'
                 f'📍 {region_hint} 여행 전 꼭 알아야 할 핵심 정보</h3>'
                 f'{intro_html}{row_html}'
@@ -1797,6 +1808,7 @@ class TravelBlogGenerator:
 [글 스타일]: {style['name']} - {style['desc']}
 [그룹]: {group_label}
 [제목 힌트]: {title_hint}
+[제목 규칙]: 제목은 한글로, 지역+테마 중심. 확실하지 않은 추정 상호명(특히 영문)을 제목에 넣지 마세요.
 [코스]: {course_line}
 {naver_ctx}{style_ctx}{struct_ctx}{memo_ctx}{custom_style_ctx}
 [방문 장소 목록 (시간순, 장소별 사진 수)]:
@@ -1948,8 +1960,52 @@ class TravelBlogGenerator:
 [JSON 응답]
 {{"title":"제목 30~50자","content":"HTML본문","meta_description":"150자","tags":["태그x7"],"hashtags":["#해시x5"]}}"""
 
+    # ── 결정적 후처리 스크럽 ──
+    FABRICATION_PHRASES = [
+        "신선한 재료로 만든", "신선한 재료로", "엄선된 재료로", "엄선된 재료의",
+        "정성껏 만든", "정성을 다해 만든", "고급스러운 인테리어의", "고급스러운 인테리어",
+        "모던한 인테리어의", "모던한 인테리어", "세련된 인테리어의", "세련된 인테리어",
+        "일본식 커피 전문점", "현지인들이 즐겨 찾는", "현지인이 즐겨 찾는",
+    ]
+    CLICHE_WORDS = ["아늑한", "여유로운", "편안한", "완벽한", "포근한"]
+    CLICHE_CAP = 2
+
+    def _scrub_content(self, content):
+        """결정적 후처리: 날조 수식구 제거 + 상투어 2회 초과분 형용사 제거.
+        Korean 어구만 타깃이라 HTML 태그/base64는 건드리지 않는다."""
+        if not content:
+            return content
+        import re as _re
+        for ph in self.FABRICATION_PHRASES:
+            content = content.replace(ph + " ", "").replace(ph, "")
+        for w in self.CLICHE_WORDS:
+            cnt = {"n": 0}
+            def _rep(m):
+                cnt["n"] += 1
+                return m.group(0) if cnt["n"] <= self.CLICHE_CAP else ""
+            content = _re.sub(_re.escape(w) + r"\s?", _rep, content)
+        content = _re.sub(r"  +", " ", content)
+        content = _re.sub(r"\s+([.,!?])", r"\1", content)
+        return content
+
+    def _scrub_title(self, title, bad_names=None):
+        """제목에서 비신뢰 상호명/영문 토큰 제거 + 구두점 정리. 다 지워지면 원본 유지."""
+        import re as _re
+        t = title or ""
+        for nm in (bad_names or []):
+            if nm:
+                t = t.replace(nm, "")
+        # 한글 제목 기준 — 남은 라틴 문자 런(영문 상호) 제거
+        t = _re.sub(r"[A-Za-z][A-Za-z0-9'&.\- ]*[A-Za-z0-9]", "", t)
+        t = _re.sub(r"\s*[,·:\-]\s*$", "", t)
+        t = _re.sub(r"^\s*[,·:\-]\s*", "", t)
+        t = _re.sub(r"\s*,\s*,", ",", t)
+        t = _re.sub(r"\s+([,.])", r"\1", t)
+        t = _re.sub(r"  +", " ", t).strip()
+        return t or (title or "")
+
     def _call_ai(self, prompt, temperature, photos):
-        """AI 호출 + 사진 삽입 + 구글맵 링크 삽입"""
+        """AI 호출 + 사진 삽입 + 구글맵 링크 삽입 + 결정적 스크럽"""
         try:
             r = self.client.chat.completions.create(
                 model=self.model,
@@ -1964,6 +2020,11 @@ class TravelBlogGenerator:
             elif "```" in txt: txt=txt.split("```")[1].split("```")[0].strip()
             post = json.loads(txt)
             post["content"] = self._insert_photos_with_map(post["content"], photos)
+            post["content"] = self._scrub_content(post["content"])
+            bad = [r.get("location_name", "") for r in photos
+                   if r.get("location_name") and not r.get("name_confident")]
+            if post.get("title"):
+                post["title"] = self._scrub_title(post["title"], bad)
             return post
         except Exception as e:
             logger.error(f"❌ AI 생성 오류: {e}"); return None
@@ -1989,6 +2050,16 @@ class TravelBlogGenerator:
     # ─────────────────────────────────────────
     # 사진 + 구글맵 링크 삽입
     # ─────────────────────────────────────────
+    @staticmethod
+    def _dedupe_separators(content):
+        """연속된 구분선(─) 문단을 1개로 정규화.
+        AI가 인접 구분선을 중복 출력하는 경우를 대비. 본문이 사이에 끼면(비인접) 보존."""
+        sep = r'<p[^>]*>\s*─[\s─]*</p>'
+        return re.sub(
+            rf'(?:{sep})(?:\s*(?:<br\s*/?>)?\s*(?:{sep}))+',
+            '<p style="text-align:center;color:#d4d4d4;letter-spacing:8px">─ ─ ─ ─ ─ ─ ─</p>',
+            content)
+
     def _insert_photos_with_map(self, content, results):
         """장소 매칭 기반 사진 삽입
         - 같은 장소 사진 중 마지막에만 지도 1개
@@ -2097,6 +2168,9 @@ class TravelBlogGenerator:
 
         # 남은 [PHOTO:] 태그 정리
         content = re.sub(r'\[PHOTO:[^\]]*\]', '', content)
+
+        # 연속된 구분선(─) 문단 중복 제거 → 1개로 정규화
+        content = self._dedupe_separators(content)
 
         total = len(results)
         placed_cnt = len(inserted)
@@ -2550,14 +2624,17 @@ class TravelBlogGenerator:
         parts = []
         try:
             key = self.google_key
-            # ── Google Place Details ──
-            nearby_url = (
-                f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?"
-                f"location={lat},{lon}&radius=80&language=ko&key={key}"
-            )
-            req = urllib.request.Request(nearby_url)
-            with urllib.request.urlopen(req, timeout=8) as r:
-                nearby = json.loads(r.read().decode())
+            # 무료 모드: Google Maps 키 없으면 유료 Places 호출 생략(네이버 검색만 사용)
+            nearby = {}
+            if key:
+                # ── Google Place Details ──
+                nearby_url = (
+                    f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?"
+                    f"location={lat},{lon}&radius=80&language=ko&key={key}"
+                )
+                req = urllib.request.Request(nearby_url)
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    nearby = json.loads(r.read().decode())
 
             if nearby.get("results"):
                 skip_types = {"route","street_address","sublocality","locality",

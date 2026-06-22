@@ -42,8 +42,8 @@ def test_name_match():
     assert pa._name_match("", "x") is False
 
 
-# ── Places 우선 + 간판 교차검증 + 후보 캐시 ──
-def test_resolve_poi_crosscheck_and_cache(monkeypatch):
+# ── 신뢰 기반: 간판 교차검증만 신뢰, 추측은 None ──
+def test_resolve_poi_crosscheck_only(monkeypatch):
     pa = _pa()
     cands = [
         {"name": "Giraffe Monochrome", "primaryType": "restaurant", "lat": 33.8838, "lon": 130.8799},
@@ -54,17 +54,46 @@ def test_resolve_poi_crosscheck_and_cache(monkeypatch):
         calls["n"] += 1
         return list(cands)
     monkeypatch.setattr(pa, "_places_nearby", fake)
-    # 환각 간판("뚜레쥬르") → 후보 불일치 → 무시하고 랭킹
-    r = pa._resolve_poi(33.883734, 130.879971, "맛집", visible_name="뚜레쥬르")
-    assert r["name"] in ("Giraffe Monochrome", "스케상우동 우오마치점")
-    # 간판이 후보와 일치 → 그 후보 채택
-    r2 = pa._resolve_poi(33.883734, 130.879971, "맛집", visible_name="스케상우동")
-    assert r2["name"] == "스케상우동 우오마치점"
-    # 같은 GPS → 후보 캐시 1회만 조회
+    # 간판 없음 → 추측 안 함 → None (네트워크 조회도 안 함)
+    assert pa._resolve_poi(33.883734, 130.879971, "맛집") is None
+    assert calls["n"] == 0
+    # 환각 간판 불일치 → None
+    assert pa._resolve_poi(33.883734, 130.879971, "맛집", visible_name="뚜레쥬르") is None
+    # 간판 일치 → 그 후보
+    r = pa._resolve_poi(33.883734, 130.879971, "맛집", visible_name="스케상우동")
+    assert r["name"] == "스케상우동 우오마치점"
+    # 같은 GPS → 후보 캐시 1회만
     assert calls["n"] == 1
-    # 후보 없음 → None
-    monkeypatch.setattr(pa, "_places_nearby", lambda *a, **k: [])
-    assert pa._resolve_poi(35.0, 135.0, "카페") is None
+
+
+# ── 결정적 스크럽 ──
+def test_scrub_content():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    out = g._scrub_content("신선한 재료로 만든 샌드위치와 모던한 인테리어가 좋아요.")
+    assert "신선한 재료로 만든" not in out and "모던한 인테리어" not in out
+    assert "샌드위치" in out
+    out2 = g._scrub_content("아늑한 곳 아늑한 자리 아늑한 분위기 아늑한 시간")
+    assert out2.count("아늑한") == 2
+
+
+def test_scrub_title():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    assert g._scrub_title("기타큐슈의 아늑한 카페, Giraffe Monochrome", ["우오마치 카페"]) == "기타큐슈의 아늑한 카페"
+    t = g._scrub_title("우오마치 카페 탐방기", ["우오마치 카페"])
+    assert "우오마치 카페" not in t and t.strip() != ""
+    assert g._scrub_title("기타큐슈 카페 여행", []) == "기타큐슈 카페 여행"
+
+
+# ── 위키 박스: TRAVEL WIKI 라벨 제거 ──
+def test_region_desc_no_wiki_label(monkeypatch):
+    import types, json as _json
+    g = TravelBlogGenerator(Config())
+    fake = types.SimpleNamespace(choices=[types.SimpleNamespace(
+        message=types.SimpleNamespace(content=_json.dumps(
+            {"intro": "기타큐슈 소개", "specialties": ["a"], "foods": ["b"], "spots": ["c"]})))])
+    monkeypatch.setattr(g.client.chat.completions, "create", lambda **k: fake)
+    box = g._generate_region_desc("기타큐슈")
+    assert "TRAVEL WIKI" not in box and "기타큐슈" in box
 
 
 # ── Task 5: 일정(세그먼트) 분할 ──
@@ -110,3 +139,30 @@ def test_prompt_has_grounding_rules():
     style = {"name": "감성", "desc": "감성적"}
     p = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "")
     assert "단정하지 마세요" in p and "반복하지 마세요" in p and "오감으로" in p
+
+
+# ── 무료 모드: Nominatim 주소 → 행정구역(city/region/country) ──
+def test_pick_admin():
+    # city/province 직접 매칭
+    assert PhotoAnalyzer._pick_admin(
+        {"city": "기타큐슈시", "province": "후쿠오카현", "country": "일본"}
+    ) == ("기타큐슈시", "후쿠오카현", "일본")
+    # city 없으면 town → county 순 폴백, region은 state 폴백
+    assert PhotoAnalyzer._pick_admin({"town": "유후인", "state": "오이타현"}) == ("유후인", "오이타현", "")
+    assert PhotoAnalyzer._pick_admin({"county": "군지역"})[0] == "군지역"
+    # 빈 주소 → 모두 빈 문자열 (지역 미감지 → 위키 박스 생략 가드와 연결)
+    assert PhotoAnalyzer._pick_admin({}) == ("", "", "")
+
+
+# ── 구분선(─) 연속 중복 정규화 ──
+def test_dedupe_separators():
+    sep = '<p style="text-align:center;color:#d4d4d4;letter-spacing:8px">─ ─ ─ ─ ─ ─ ─</p>'
+    full = "─ ─ ─ ─ ─ ─ ─"
+    # 인접 2개 → 1개
+    assert TravelBlogGenerator._dedupe_separators(sep + "\n" + sep).count(full) == 1
+    # 인접 3개(<br>·공백 섞임) → 1개
+    assert TravelBlogGenerator._dedupe_separators(sep + "<br/>" + sep + "  " + sep).count(full) == 1
+    # 본문이 사이에 끼면(비인접) 둘 다 보존
+    assert TravelBlogGenerator._dedupe_separators(sep + "<p>본문</p>" + sep).count(full) == 2
+    # 단일 구분선 → 그대로
+    assert TravelBlogGenerator._dedupe_separators(sep).count(full) == 1
