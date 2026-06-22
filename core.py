@@ -1701,16 +1701,19 @@ class TravelBlogGenerator:
                 model=self.model,
                 messages=[
                     {"role": "system", "content":
-                        "정확한 지역 백과사전. 확실히 아는 사실만 답하고, 불확실하면 항목을 비운다. "
-                        "해당 지역에 실제로 있는 것만 — 인접 현이나 다른 지역의 명소·특산품을 섞지 않는다. JSON으로만 응답."},
+                        "정확한 지역 백과사전. 도시·현 레벨에서 전국적으로 유명하고 확실히 아는 것만 답한다. "
+                        "조금이라도 불확실하면 그 항목을 비운다 — 개수를 채우려고 지어내지 않는다. "
+                        "인접 현·다른 지방의 명소·특산품·음식을 절대 섞지 않는다. "
+                        "동·구·번지 단위의 작은 가게나 소규모 명소는 넣지 않는다. JSON으로만 응답."},
                     {"role": "user", "content":
                         f"'{region_hint}' 여행 전 꼭 알아야 할 핵심 정보를 아래 JSON 형식으로만 응답하세요.\n"
-                        f"모든 값은 한국어. specialties/foods/spots는 각 3~5개 배열.\n"
-                        f"반드시 '{region_hint}' 안에 실제로 있는 것만. 확실하지 않으면 그 배열을 비우거나 줄이세요(없는 것 채우기 금지).\n"
-                        '{"intro":"3~5줄 지역 소개(확실한 사실만)","specialties":["대표 특산품"],'
-                        '"foods":["꼭 먹어봐야 할 음식"],"spots":["대표 관광지"]}'}
+                        f"모든 값은 한국어. specialties/foods/spots는 각 0~4개 배열 — "
+                        f"'{region_hint}' 안에 실제로 있고 전국적으로 유명한 것만 넣으세요. "
+                        f"확실하지 않으면 빈 배열로 두세요(개수 채우기 절대 금지).\n"
+                        '{"intro":"2~4줄 지역 소개(확실한 사실만)","specialties":[],'
+                        '"foods":[],"spots":[]}'}
                 ],
-                max_tokens=500, temperature=0.6
+                max_tokens=500, temperature=0
             )
             txt = r.choices[0].message.content.strip()
             if "```json" in txt:
