@@ -4,6 +4,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator
+from posters import NaverSeleniumPoster
 
 
 def _pa():
@@ -166,3 +167,17 @@ def test_dedupe_separators():
     assert TravelBlogGenerator._dedupe_separators(sep + "<p>본문</p>" + sep).count(full) == 2
     # 단일 구분선 → 그대로
     assert TravelBlogGenerator._dedupe_separators(sep).count(full) == 1
+
+
+# ── 발행 공개설정: 한글 인식 + 안전 기본값(알 수 없으면 비공개) ──
+def test_visibility_target_safe_default():
+    f = NaverSeleniumPoster._visibility_target
+    assert f("private") == "비공개"
+    assert f("비공개") == "비공개"          # 앱 기본값이 한글 → 공개로 떨어지던 버그
+    assert f("public") == "전체공개"
+    assert f("전체공개") == "전체공개"
+    assert f("neighbor") == "서로이웃공개"
+    # 알 수 없는/빈 값 → 안전하게 비공개 (실수로 전체공개 발행되는 사고 방지)
+    assert f("") == "비공개"
+    assert f("garbage") == "비공개"
+    assert f(None) == "비공개"

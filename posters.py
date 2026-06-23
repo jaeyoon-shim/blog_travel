@@ -1052,10 +1052,20 @@ class NaverSeleniumPoster(_SeleniumBase):
         time.sleep(0.5)
         return True
 
-    def _set_visibility(self, visibility="public"):
-        vis_map = {"public": "전체공개", "private": "비공개",
-                   "neighbor": "서로이웃공개"}
-        target = vis_map.get(visibility, "전체공개")
+    @staticmethod
+    def _visibility_target(visibility):
+        """공개설정 입력값(영문 키 또는 한글)을 네이버 라벨로 정규화.
+        알 수 없는 값은 안전하게 '비공개' — 실수로 전체공개 발행되는 사고 방지."""
+        vis_map = {
+            "public": "전체공개", "private": "비공개", "neighbor": "서로이웃공개",
+            # 앱 기본값/설정이 한글이라(예: "비공개") 매핑 실패 → 공개로 떨어지던 버그 방지
+            "전체공개": "전체공개", "비공개": "비공개",
+            "서로이웃공개": "서로이웃공개", "이웃공개": "서로이웃공개",
+        }
+        return vis_map.get(visibility, "비공개")
+
+    def _set_visibility(self, visibility="private"):
+        target = self._visibility_target(visibility)
         result = self.driver.execute_script("""
             var t = arguments[0];
             var radios = document.querySelectorAll('input[type="radio"]');
@@ -1104,7 +1114,7 @@ class NaverSeleniumPoster(_SeleniumBase):
             logger.info(f"  태그 {len(tags[:10])}개 입력")
 
     # ── 메인 발행 ──
-    def post(self, data, visibility="public", schedule=None):
+    def post(self, data, visibility="private", schedule=None):
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
@@ -1509,7 +1519,7 @@ class NaverPoster:
         self._clipboard = ClipboardPoster("naver")
         self._selenium = None  # 지연 초기화
 
-    def post(self, data, method="clipboard", visibility="public", schedule=None):
+    def post(self, data, method="clipboard", visibility="private", schedule=None):
         if method == "selenium":
             if not self._selenium:
                 self._selenium = NaverSeleniumPoster()
