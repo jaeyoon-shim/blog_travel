@@ -700,8 +700,10 @@ class PhotoAnalyzer:
         # ── 배치 한글 변환 (외국어 장소명 모아서 1번 AI 호출) ──
         foreign_items = []
         for i, r in enumerate(results):
-            if r.get("poi_resolved"):
-                continue  # Places가 한글 상호명 반환(예 "샌드위치 팩토리 OCM") → 번역 스킵
+            # Places(한글 상호명)는 스킵하되, POI여도 외국어가 남으면 번역
+            # (무료 모드: Nominatim이 한글 OSM명 없을 때 원문 일본어 POI명 반환 → 제목/본문 누출 방지)
+            if r.get("poi_resolved") and not self._has_foreign_chars(r.get("location_name","")):
+                continue
             name = r.get("location_name","")
             if name and self._has_foreign_chars(name):
                 foreign_items.append((i, name, r.get("location_name_local","")))
