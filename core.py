@@ -1772,6 +1772,7 @@ class TravelBlogGenerator:
 
         self._current_route_modes = route_modes or {}
         self._current_route_data = route_data
+        self._current_place_meta = group.get("place_meta", {})
 
         # 장소별 메모
         place_memos = group.get("place_memos", {})
@@ -2404,6 +2405,7 @@ class TravelBlogGenerator:
 
         # 3단계: 장소→장소 이동 경로 안내 삽입
         content = self._insert_route_guides(content, place_groups)
+        content = self._insert_meta_lines(content)
 
         # 남은 [PHOTO:] 태그 정리
         content = re.sub(r'\[PHOTO:[^\]]*\]', '', content)
@@ -2583,6 +2585,40 @@ class TravelBlogGenerator:
         if fr == ("", "") or to == ("", ""):
             return False
         return fr == to
+
+    def _insert_meta_lines(self, content):
+        """장소별 별점·가격 줄을 매칭되는 <h2> 헤딩 바로 뒤에 삽입.
+        매칭 헤딩 없으면 조용히 생략. self._current_place_meta 사용."""
+        meta = getattr(self, "_current_place_meta", {}) or {}
+        if not meta:
+            return content
+        import re as _re
+        h2s = list(_re.finditer(r'(<h2[^>]*>)(.*?)(</h2>)', content,
+                                _re.IGNORECASE | _re.DOTALL))
+        if not h2s:
+            return content
+        inserts = []
+        for loc, m in meta.items():
+            line = self._format_meta_line(
+                m.get("rating"), m.get("amount"), m.get("currency", ""),
+                m.get("show_rating", True), m.get("show_price", True))
+            if not line:
+                continue
+            loc_chars = set((loc or "").replace(" ", ""))
+            if not loc_chars:
+                continue
+            best, best_score = None, 0
+            for h in h2s:
+                txt = _re.sub(r'<[^>]+>', '', h.group(2)).strip()
+                hc = set(txt.replace(" ", ""))
+                ov = len(loc_chars & hc) / len(loc_chars)
+                if ov > best_score and ov >= 0.4:
+                    best_score, best = ov, h
+            if best is not None:
+                inserts.append((best.end(), "\n" + line))
+        for pos, html in sorted(inserts, reverse=True):
+            content = content[:pos] + html + content[pos:]
+        return content
 
     def _insert_route_guides(self, content, place_groups):
         """장소→장소 사이에 이동 경로 카드 삽입.

@@ -296,3 +296,21 @@ def test_groups_from_plan():
     assert g["place_meta"]["오타루 운하 본점"]["rating"] == 4.5
     assert any(p["location_name"] == "오타루 운하 본점" for p in g["photos"])
     assert photos[0]["location_name"] == "오타루 운하"   # 원본 비변형(덮어쓰기는 복사본에만)
+
+
+# ── 생성: 별점·가격 줄을 장소 섹션에 주입 ──
+def test_insert_meta_lines():
+    g = _gen()
+    g._current_place_meta = {"오타루 운하": {"rating": 4.5, "amount": 2000,
+        "currency": "JPY", "show_rating": True, "show_price": True}}
+    out = g._insert_meta_lines("<h2>오타루 운하</h2><p>본문</p>")
+    assert "⭐ 4.5" in out and "¥2,000" in out
+    assert "http" not in out                       # URL 없음
+    assert out.index("⭐") > out.index("</h2>")     # 헤딩 뒤에 삽입
+    # 매칭되는 헤딩 없으면 원문 그대로(조용히 생략)
+    g._current_place_meta = {"없는장소XYZ": {"rating": 3.0, "amount": None,
+        "currency": "", "show_rating": True, "show_price": True}}
+    assert g._insert_meta_lines("<h2>오타루 운하</h2>") == "<h2>오타루 운하</h2>"
+    # 메타 없으면 그대로
+    g._current_place_meta = {}
+    assert g._insert_meta_lines("<h2>x</h2>") == "<h2>x</h2>"
