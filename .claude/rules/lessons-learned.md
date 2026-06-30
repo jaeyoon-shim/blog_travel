@@ -53,3 +53,7 @@
 
 5. **🔴 단일 인라인 `<script>`의 구문오류 1개 = SPA 전체 사망**: `static/index.html`은 거대한 단일 인라인 스크립트라, 어디든 구문오류(예: `updateSettingsPreview`의 짝 없는 `}`)가 하나 있으면 **모든 함수·리스너가 미정의**되어 화면이 정적 스켈레톤만 남는다(콘솔에 조용히 죽기도). 발견 당시 이 오류는 **기존부터 존재**(이 작업과 무관)해 웹 UI가 통째로 안 돌고 있었다.
    - **교훈**: UI 변경은 유닛/코드리뷰만으로 부족 — **실제 브라우저 렌더 확인 필수**(`/browse`로 스크린샷). 정적 검증으로 `node -e "new (require('vm').Script)(scriptSrc)"`(V8=브라우저 파서)로 인라인 스크립트 파싱을 검사할 수 있다. (`node --check`는 CJS 래퍼 때문에 오탐 위치를 주지만, vm.Script는 정확.)
+
+6. **영수증 UX = 업로드 단계에서 사진과 함께 + 자동 매칭**: 영수증은 1단계에서 별도 영역(`#rdz`→`/api/receipts/upload`)으로 올려 즉시 OCR, `state["receipts"]`에 보관. 계획 초안 시 `TripPlanner.match_receipts_to_stops`로 **가게명↔장소명 일치(+같은 날짜)** 인 stop에 자동 배정(추측 안 함, 실패분은 `plan["unmatched_receipts"]`). 2단계 장소 카드에서 매칭 표시+재배정, 상단 "미배정 영수증"칸에서 드롭다운으로 배정. 카드별 개별 첨부는 폐기.
+
+7. **`/browse` 테스트 함정 2개**: (a) `browse js`는 **격리 월드**라 페이지 전역(go/render 등) 접근 불가 → DOM은 읽히지만 함수 호출은 안 됨. 네비게이션은 실제 `browse click`으로. (b) Chrome은 **특정 포트(5060/5061=SIP 등)를 ERR_UNSAFE_PORT로 차단** → 로컬 테스트 서버는 8088 등 안전 포트 사용. (c) flex 행에서 `<select>`(긴 옵션)는 최소너비가 커져 옆 `<span>`을 0폭으로 만들어 글자 세로깨짐 → 세로 스택 또는 select `max-width`.

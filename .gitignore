@@ -42,3 +42,5 @@ _publish_test.py
 _test_cache/
 plans/
 .gstack/
+profiles/
+last_profile.txt
