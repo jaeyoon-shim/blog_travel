@@ -1555,6 +1555,32 @@ class TripPlanner:
         return stops
 
 
+class ReceiptReader:
+    """영수증 이미지 → {store_name, amount, currency, date}. (이 태스크는 파싱만)"""
+
+    _CUR = [("JPY", ["¥", "円", "JPY"]), ("KRW", ["₩", "원", "KRW"]),
+            ("USD", ["$", "USD"])]
+
+    @staticmethod
+    def _parse_amount(text):
+        """텍스트에서 (정수금액, 통화코드). 실패 시 (None, '')."""
+        import re
+        if not text:
+            return (None, "")
+        currency = ""
+        for code, syms in ReceiptReader._CUR:
+            if any(s in text for s in syms):
+                currency = code; break
+        nums = re.findall(r'\d[\d,]*(?:\.\d+)?', text)
+        if not nums:
+            return (None, "")
+        vals = [int(float(n.replace(",", ""))) for n in nums]
+        amount = max(vals) if vals else None
+        if amount is None:
+            return (None, "")
+        return (amount, currency)
+
+
 # ============================================================
 # 여행 블로그 글 생성기 v2
 # ============================================================

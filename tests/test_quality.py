@@ -3,7 +3,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator, TripPlanner
+from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator, TripPlanner, ReceiptReader
 from posters import NaverSeleniumPoster
 
 
@@ -244,3 +244,12 @@ def test_build_draft_merges_same_name_and_no_mutation():
     assert len(same) == 1 and len(same[0]["photo_ids"]) == 2
     # 입력 dict가 변형되지 않아야 함 (_pid 누출 금지)
     assert "_pid" not in photos[0]
+
+
+# ── 영수증: 금액·통화 파싱 ──
+def test_parse_amount():
+    assert ReceiptReader._parse_amount("合計 ¥2,000") == (2000, "JPY")
+    assert ReceiptReader._parse_amount("합계 12,000원") == (12000, "KRW")
+    assert ReceiptReader._parse_amount("₩12,000") == (12000, "KRW")
+    assert ReceiptReader._parse_amount("Total $15.00") == (15, "USD")
+    assert ReceiptReader._parse_amount("영수증") == (None, "")
