@@ -1580,6 +1580,56 @@ class ReceiptReader:
             return (None, "")
         return (amount, currency)
 
+    def __init__(self, config):
+        self.model = config.get("openai", "model") or "gpt-4o-mini"
+        from openai import OpenAI
+        self.client = OpenAI(api_key=config.get("openai", "api_key"))
+
+    @staticmethod
+    def crosscheck_name(store_name, stop_name):
+        """가게명과 장소명이 충분히 유사하면 True(장소명 반영 제안용)."""
+        def norm(s):
+            return "".join((s or "").lower().split())
+        a, b = norm(store_name), norm(stop_name)
+        if not a or not b:
+            return False
+        short, long_ = sorted([a, b], key=len)
+        return short in long_
+
+    def read(self, image_path):
+        """영수증 이미지 -> {store_name, amount, currency, date, ocr_source}.
+        실패 시 빈 값(수동 입력 폴백). currency=='' 이면 통화 미상."""
+        import base64, mimetypes, json
+        out = {"store_name": "", "amount": None, "currency": "", "date": "",
+               "ocr_source": "auto"}
+        try:
+            mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+            with open(image_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            prompt = (
+                "이 영수증 이미지에서 다음을 JSON으로만 추출: "
+                "store_name(가게명), total_text(합계 금액이 보이는 줄 원문 그대로, 통화기호 포함), "
+                "date(YYYY-MM-DD). 모르면 빈 문자열."
+            )
+            r = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                ]}],
+                response_format={"type": "json_object"},
+            )
+            data = json.loads(r.choices[0].message.content)
+            out["store_name"] = data.get("store_name", "") or ""
+            out["date"] = data.get("date", "") or ""
+            amount, currency = self._parse_amount(data.get("total_text", ""))
+            out["amount"] = amount
+            out["currency"] = currency
+        except Exception as e:
+            logger.warning("receipt OCR failed: %s", str(e))
+        return out
+
 
 # ============================================================
 # 여행 블로그 글 생성기 v2

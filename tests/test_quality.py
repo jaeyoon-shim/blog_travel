@@ -253,3 +253,11 @@ def test_parse_amount():
     assert ReceiptReader._parse_amount("₩12,000") == (12000, "KRW")
     assert ReceiptReader._parse_amount("Total $15.00") == (15, "USD")
     assert ReceiptReader._parse_amount("영수증") == (None, "")
+
+
+# ── 영수증: 가게명↔장소명 교차검증 제안 ──
+def test_receipt_crosscheck_name():
+    assert ReceiptReader.crosscheck_name("小樽硝子", "오타루 운하") is False
+    assert ReceiptReader.crosscheck_name("스타벅스 삿포로점", "스타벅스") is True
+    assert ReceiptReader.crosscheck_name("스타벅스", "") is False
+    assert ReceiptReader.crosscheck_name("", "스타벅스") is False
