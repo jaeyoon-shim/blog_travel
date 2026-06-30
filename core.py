@@ -1463,6 +1463,226 @@ class TripStructurer:
         return 2 * R * math.asin(math.sqrt(a))
 
 
+class TripPlanner:
+    """사진 분석 결과 → 검수용 계획 초안(TripPlan dict). 네트워크 미사용."""
+
+    @staticmethod
+    def _photo_id(file_path):
+        import hashlib, os
+        base = os.path.basename(file_path or "")
+        return "p" + hashlib.md5(base.encode("utf-8")).hexdigest()[:8]
+
+    @staticmethod
+    def _assign_day(exif_date, cutoff_hour=4):
+        """'2026:06:22 14:30:00' -> 'YYYY-MM-DD'. 시각<cutoff면 전날. 실패시 None."""
+        import re
+        from datetime import datetime, timedelta
+        if not exif_date:
+            return None
+        m = re.search(r'(\d{4})[:\-/](\d{2})[:\-/](\d{2})[ T]?(\d{2})?:?(\d{2})?', exif_date)
+        if not m:
+            return None
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        hh = int(m.group(4)) if m.group(4) else 12
+        try:
+            dt = datetime(y, mo, d, hh)
+        except ValueError:
+            return None
+        if hh < cutoff_hour:
+            dt = dt - timedelta(days=1)
+        return dt.strftime("%Y-%m-%d")
+
+    @staticmethod
+    def build_draft(photo_results, free_mode=False):
+        """photo_results → TripPlan dict (검수 전 초안). 입력 dict를 변형하지 않음."""
+        region = ""
+        for r in photo_results:
+            if r.get("region"):
+                region = r["region"]; break
+
+        day_map = {}
+        undated = []
+        for r in photo_results:
+            pid = TripPlanner._photo_id(r.get("file_path", ""))
+            day = TripPlanner._assign_day(r.get("exif_date", ""))
+            if day is None:
+                undated.append(pid)
+            else:
+                day_map.setdefault(day, []).append((pid, r))
+
+        days = []
+        for day_no, (date_key, items) in enumerate(sorted(day_map.items()), 1):
+            stops = TripPlanner._stops_for_day(items)
+            days.append({"day_no": day_no, "date": date_key, "stops": stops})
+
+        return {
+            "plan_version": 1,
+            "trip_title": "",
+            "region": region,
+            "region_source": "auto" if region else "none",
+            "free_mode": bool(free_mode),
+            "days": days,
+            "undated_photo_ids": undated,
+            "excluded_photo_ids": [],
+        }
+
+    @staticmethod
+    def groups_from_plan(plan, photo_results):
+        """확정 plan + 원본 photo_results → 생성기용 Day별 그룹 리스트.
+        photo_results를 변형하지 않음(복사본에 확정 장소명 덮어씀). 네트워크 미사용.
+        place_meta는 별점·가격 줄용으로 그룹에 실어두되 이 단계에선 소비하지 않음."""
+        by_pid = {}
+        for r in photo_results:
+            by_pid[TripPlanner._photo_id(r.get("file_path", ""))] = r
+        groups = []
+        for d in plan.get("days", []):
+            photos, memos, meta, names = [], {}, {}, []
+            for s in d.get("stops", []):
+                name = s.get("name", "") or "미확인"
+                if name not in names:
+                    names.append(name)
+                bits = []
+                if s.get("events"):
+                    bits.append("사건: " + "; ".join(s["events"]))
+                if s.get("feeling"):
+                    bits.append("느낌: " + s["feeling"])
+                if s.get("ai_instruction"):
+                    bits.append("지시: " + s["ai_instruction"])
+                if bits:
+                    memos[name] = " / ".join(bits)
+                rc = s.get("receipt") or {}
+                meta[name] = {
+                    "rating": s.get("rating"),
+                    "amount": rc.get("amount"),
+                    "currency": rc.get("currency", ""),
+                    "show_rating": s.get("show_rating", True),
+                    "show_price": s.get("show_price", True),
+                }
+                for pid in s.get("photo_ids", []):
+                    r = by_pid.get(pid)
+                    if not r:
+                        continue
+                    rc2 = dict(r)
+                    if s.get("name"):
+                        rc2["location_name"] = s["name"]
+                    photos.append(rc2)
+            if not photos:
+                continue
+            groups.append({
+                "group_id": d.get("day_no", len(groups) + 1),
+                "label": f"{d.get('day_no','')}일차",
+                "photos": photos,
+                "course_line": " → ".join(names),
+                "place_memos": memos,
+                "place_meta": meta,
+            })
+        return groups
+
+    @staticmethod
+    def _stops_for_day(items):
+        """하루치 (pid, photo) 튜플 목록 → 장소(stop) 목록.
+        같은 location_name끼리 묶음(빈 이름은 개별 stop). 입력 dict 비변형."""
+        groups = []       # [(name, [pids])]
+        index = {}        # name → groups idx
+        for pid, p in items:
+            name = p.get("location_name", "") if p.get("name_confident") else ""
+            if name and name in index:
+                groups[index[name]][1].append(pid)
+            else:
+                if name:
+                    index[name] = len(groups)
+                groups.append((name, [pid]))
+        stops = []
+        for order, (name, pids) in enumerate(groups, 1):
+            stops.append({
+                "stop_id": "s" + pids[0][1:],
+                "order": order,
+                "name": name,
+                "name_source": "auto" if name else "none",
+                "events": [], "feeling": "", "ai_instruction": "",
+                "rating": None, "receipt": None,
+                "show_rating": True, "show_price": True,
+                "photo_ids": list(pids),
+            })
+        return stops
+
+
+class ReceiptReader:
+    """영수증 이미지 → {store_name, amount, currency, date}. (이 태스크는 파싱만)"""
+
+    _CUR = [("JPY", ["¥", "円", "JPY"]), ("KRW", ["₩", "원", "KRW"]),
+            ("USD", ["$", "USD"])]
+
+    @staticmethod
+    def _parse_amount(text):
+        """텍스트에서 (정수금액, 통화코드). 실패 시 (None, '')."""
+        import re
+        if not text:
+            return (None, "")
+        currency = ""
+        for code, syms in ReceiptReader._CUR:
+            if any(s in text for s in syms):
+                currency = code; break
+        nums = re.findall(r'\d[\d,]*(?:\.\d+)?', text)
+        if not nums:
+            return (None, "")
+        vals = [int(float(n.replace(",", ""))) for n in nums]
+        amount = max(vals) if vals else None
+        if amount is None:
+            return (None, "")
+        return (amount, currency)
+
+    def __init__(self, config):
+        self.model = config.get("openai", "model") or "gpt-4o-mini"
+        from openai import OpenAI
+        self.client = OpenAI(api_key=config.get("openai", "api_key"))
+
+    @staticmethod
+    def crosscheck_name(store_name, stop_name):
+        """가게명과 장소명이 충분히 유사하면 True(장소명 반영 제안용)."""
+        def norm(s):
+            return "".join((s or "").lower().split())
+        a, b = norm(store_name), norm(stop_name)
+        if not a or not b:
+            return False
+        short, long_ = sorted([a, b], key=len)
+        return short in long_
+
+    def read(self, image_path):
+        """영수증 이미지 -> {store_name, amount, currency, date, ocr_source}.
+        실패 시 빈 값(수동 입력 폴백). currency=='' 이면 통화 미상."""
+        import base64, mimetypes, json
+        out = {"store_name": "", "amount": None, "currency": "", "date": "",
+               "ocr_source": "auto"}
+        try:
+            mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+            with open(image_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            prompt = (
+                "이 영수증 이미지에서 다음을 JSON으로만 추출: "
+                "store_name(가게명), total_text(합계 금액이 보이는 줄 원문 그대로, 통화기호 포함), "
+                "date(YYYY-MM-DD). 모르면 빈 문자열."
+            )
+            r = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                ]}],
+                response_format={"type": "json_object"},
+            )
+            data = json.loads(r.choices[0].message.content)
+            out["store_name"] = data.get("store_name", "") or ""
+            out["date"] = data.get("date", "") or ""
+            amount, currency = self._parse_amount(data.get("total_text", ""))
+            out["amount"] = amount
+            out["currency"] = currency
+        except Exception as e:
+            logger.warning("receipt OCR failed: %s", str(e))
+        return out
+
+
 # ============================================================
 # 여행 블로그 글 생성기 v2
 # ============================================================
@@ -1474,6 +1694,20 @@ class TravelBlogGenerator:
         from openai import OpenAI
         self.client = OpenAI(api_key=config.get("openai","api_key"))
         self.google_key = config.get("google","maps_api_key") or ""
+
+    _CUR_SYM = {"JPY": "¥", "KRW": "₩", "USD": "$"}
+
+    def _format_meta_line(self, rating, amount, currency, show_rating, show_price):
+        """별점·가격을 텍스트 한 줄 HTML로. URL 없음. 표시할 게 없으면 ''."""
+        parts = []
+        if show_rating and rating is not None:
+            parts.append(f"⭐ {rating:g}")
+        if show_price and amount is not None:
+            sym = self._CUR_SYM.get(currency, "")
+            parts.append(f"{sym}{amount:,}")
+        if not parts:
+            return ""
+        return '<p>' + ' / '.join(parts) + '</p>'
 
     # ─────────────────────────────────────────
     # 초안 3종 생성
@@ -1538,6 +1772,7 @@ class TravelBlogGenerator:
 
         self._current_route_modes = route_modes or {}
         self._current_route_data = route_data
+        self._current_place_meta = group.get("place_meta", {})
 
         # 장소별 메모
         place_memos = group.get("place_memos", {})
@@ -2170,6 +2405,7 @@ class TravelBlogGenerator:
 
         # 3단계: 장소→장소 이동 경로 안내 삽입
         content = self._insert_route_guides(content, place_groups)
+        content = self._insert_meta_lines(content)
 
         # 남은 [PHOTO:] 태그 정리
         content = re.sub(r'\[PHOTO:[^\]]*\]', '', content)
@@ -2349,6 +2585,40 @@ class TravelBlogGenerator:
         if fr == ("", "") or to == ("", ""):
             return False
         return fr == to
+
+    def _insert_meta_lines(self, content):
+        """장소별 별점·가격 줄을 매칭되는 <h2> 헤딩 바로 뒤에 삽입.
+        매칭 헤딩 없으면 조용히 생략. self._current_place_meta 사용."""
+        meta = getattr(self, "_current_place_meta", {}) or {}
+        if not meta:
+            return content
+        import re as _re
+        h2s = list(_re.finditer(r'(<h2[^>]*>)(.*?)(</h2>)', content,
+                                _re.IGNORECASE | _re.DOTALL))
+        if not h2s:
+            return content
+        inserts = []
+        for loc, m in meta.items():
+            line = self._format_meta_line(
+                m.get("rating"), m.get("amount"), m.get("currency", ""),
+                m.get("show_rating", True), m.get("show_price", True))
+            if not line:
+                continue
+            loc_chars = set((loc or "").replace(" ", ""))
+            if not loc_chars:
+                continue
+            best, best_score = None, 0
+            for h in h2s:
+                txt = _re.sub(r'<[^>]+>', '', h.group(2)).strip()
+                hc = set(txt.replace(" ", ""))
+                ov = len(loc_chars & hc) / len(loc_chars)
+                if ov > best_score and ov >= 0.4:
+                    best_score, best = ov, h
+            if best is not None:
+                inserts.append((best.end(), "\n" + line))
+        for pos, html in sorted(inserts, reverse=True):
+            content = content[:pos] + html + content[pos:]
+        return content
 
     def _insert_route_guides(self, content, place_groups):
         """장소→장소 사이에 이동 경로 카드 삽입.

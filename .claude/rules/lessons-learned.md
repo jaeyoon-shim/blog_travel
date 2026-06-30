@@ -38,3 +38,13 @@
 - **#6 로그 인코딩**: 로깅 핸들러/스트림에 UTF-8 + `errors="replace"` 적용 (Windows 안정성).
 - **리팩터**: "장소 이름 해석" 책임이 6개 메서드(`_nominatim_geocode`/`_google_geocode`/`_make_place_name`/`_translate_to_korean`/`_koreanize_region`/`_detect_region`)에 분산. `core.py` 2,600줄 God-class 2개. AI 작업 전 `/refactor-audit` 권장.
 - 상세 리뷰: `docs/reviews/2026-06-22-free-mode-review.md`
+
+---
+
+## 2026-06-30 — 계획 검수 단계 추가
+
+1. **계획 검수(plan review)가 생성의 단일 진실원**: 분석 완료 후 TripPlanner가 초안을 만들고, 사용자가 일정/장소명/사건/느낌/별점/영수증을 검수·확정하면 `plans/<title>/plan.json`이 생성된다. 이후 generate, /api/seo 등 모든 다운스트림은 이 plan을 참조해야 한다(`_active_groups`가 plan 기반 그룹을 봐야 /api/groups·/api/blocks·generate 간 gi 정합이 유지됨).
+
+2. **함정 — 그룹 소스 불일치**: plan 흐름에서 `/api/groups`, `/api/blocks`, `generate`가 모두 같은 그룹 소스(`_active_groups`)를 봐야 gi 인덱스가 맞는다. 한 곳이라도 원래 `state["groups"]`를 직접 참조하면 프론트 목록과 생성 그룹이 어긋난다.
+
+3. **영수증 이미지 발행 제외**: 영수증 사진은 개인정보이므로 발행 블록에서 제외. 파일명은 `werkzeug.utils.secure_filename`으로 정제. 별점·가격은 코드가 HTML 조립(`_format_meta_line`), URL은 포함하지 않는다.

@@ -3,7 +3,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator
+from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator, TripPlanner, ReceiptReader
 from posters import NaverSeleniumPoster
 
 
@@ -181,3 +181,136 @@ def test_visibility_target_safe_default():
     assert f("") == "비공개"
     assert f("garbage") == "비공개"
     assert f(None) == "비공개"
+
+
+# ── 계획 검수: photo_id 안정성 ──
+def test_photo_id_stable():
+    a = TripPlanner._photo_id("uploads/IMG_0003.jpg")
+    b = TripPlanner._photo_id("uploads/IMG_0003.jpg")
+    c = TripPlanner._photo_id("uploads/IMG_0004.jpg")
+    assert a == b              # 같은 파일 → 같은 ID (재분석 안정)
+    assert a != c
+    assert a.startswith("p")
+
+
+# ── 계획 검수: Day 배정 + 새벽 4시 컷오프 ──
+def test_assign_day_cutoff():
+    assert TripPlanner._assign_day("2026:06:22 14:30:00") == "2026-06-22"
+    assert TripPlanner._assign_day("2026:06:23 01:00:00") == "2026-06-22"
+    assert TripPlanner._assign_day("2026:06:23 04:00:00") == "2026-06-23"
+    assert TripPlanner._assign_day("") is None
+    assert TripPlanner._assign_day("날짜아님") is None
+
+
+# ── 계획 검수: 초안 합성 ──
+def _pr(fp, exif, name, conf, lat=None, lon=None):
+    r = {"file_path": fp, "file_name": fp.split("/")[-1], "exif_date": exif,
+         "location_name": name, "name_confident": conf, "region": "홋카이도",
+         "vision": {"scene_type": "관광지"}}
+    if lat is not None:
+        r["gps"] = {"lat": lat, "lon": lon}
+    return r
+
+def test_build_draft_days_and_unconfident_name_blanked():
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True, 43.19, 140.99),
+        _pr("u/b.jpg", "2026:06:22 11:00:00", "동네 카페", False, 43.19, 140.99),
+        _pr("u/c.jpg", "2026:06:23 09:00:00", "삿포로 TV타워", True, 43.06, 141.35),
+        _pr("u/d.jpg", "", "", False),   # 날짜 미상
+    ]
+    plan = TripPlanner.build_draft(photos, free_mode=True)
+    assert plan["free_mode"] is True
+    assert plan["region"] == "홋카이도"
+    day_dates = [d["date"] for d in plan["days"]]
+    assert "2026-06-22" in day_dates and "2026-06-23" in day_dates
+    assert len(plan["undated_photo_ids"]) == 1
+    for day in plan["days"]:
+        for s in day["stops"]:
+            assert s["stop_id"] and isinstance(s["photo_ids"], list)
+    names = {s["name"]: s["name_source"]
+             for d in plan["days"] for s in d["stops"]}
+    assert "오타루 운하" in names and names["오타루 운하"] == "auto"
+    assert "" in names and names[""] == "none"
+
+
+def test_build_draft_merges_same_name_and_no_mutation():
+    photos = [
+        _pr("u/x.jpg", "2026:06:22 09:00:00", "스타벅스 삿포로", True),
+        _pr("u/y.jpg", "2026:06:22 18:00:00", "스타벅스 삿포로", True),
+    ]
+    plan = TripPlanner.build_draft(photos)
+    stops = plan["days"][0]["stops"]
+    same = [s for s in stops if s["name"] == "스타벅스 삿포로"]
+    assert len(same) == 1 and len(same[0]["photo_ids"]) == 2
+    # 입력 dict가 변형되지 않아야 함 (_pid 누출 금지)
+    assert "_pid" not in photos[0]
+
+
+# ── 영수증: 금액·통화 파싱 ──
+def test_parse_amount():
+    assert ReceiptReader._parse_amount("合計 ¥2,000") == (2000, "JPY")
+    assert ReceiptReader._parse_amount("합계 12,000원") == (12000, "KRW")
+    assert ReceiptReader._parse_amount("₩12,000") == (12000, "KRW")
+    assert ReceiptReader._parse_amount("Total $15.00") == (15, "USD")
+    assert ReceiptReader._parse_amount("영수증") == (None, "")
+
+
+# ── 영수증: 가게명↔장소명 교차검증 제안 ──
+def test_receipt_crosscheck_name():
+    assert ReceiptReader.crosscheck_name("小樽硝子", "오타루 운하") is False
+    assert ReceiptReader.crosscheck_name("스타벅스 삿포로점", "스타벅스") is True
+    assert ReceiptReader.crosscheck_name("스타벅스", "") is False
+    assert ReceiptReader.crosscheck_name("", "스타벅스") is False
+
+
+# ── 생성: 별점·가격 한 줄 조립(코드가 HTML 조립) ──
+def _gen():
+    return TravelBlogGenerator(Config())
+
+def test_format_meta_line():
+    g = _gen()
+    line = g._format_meta_line(rating=4.5, amount=2000, currency="JPY",
+                               show_rating=True, show_price=True)
+    assert "4.5" in line and "¥2,000" in line
+    assert "http" not in line   # URL 절대 없음(SE3 링크카드 방지)
+    assert g._format_meta_line(4.5, 2000, "JPY", False, False) == ""
+    only_rating = g._format_meta_line(4.5, 2000, "JPY", True, False)
+    assert "4.5" in only_rating and "2,000" not in only_rating
+    assert g._format_meta_line(None, None, "", True, True) == ""
+
+
+# ── 생성 배선: 확정 plan → 생성기 그룹 ──
+def test_groups_from_plan():
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True),
+        _pr("u/b.jpg", "2026:06:22 11:00:00", "동네 카페", False),
+    ]
+    plan = TripPlanner.build_draft(photos)
+    st = plan["days"][0]["stops"][0]   # 확신 장소 "오타루 운하"
+    st["name"] = "오타루 운하 본점"; st["name_source"] = "user"
+    st["events"] = ["산책"]; st["feeling"] = "로맨틱"; st["rating"] = 4.5
+    groups = TripPlanner.groups_from_plan(plan, photos)
+    assert len(groups) == 1
+    g = groups[0]
+    assert g["place_memos"]["오타루 운하 본점"].startswith("사건:")
+    assert g["place_meta"]["오타루 운하 본점"]["rating"] == 4.5
+    assert any(p["location_name"] == "오타루 운하 본점" for p in g["photos"])
+    assert photos[0]["location_name"] == "오타루 운하"   # 원본 비변형(덮어쓰기는 복사본에만)
+
+
+# ── 생성: 별점·가격 줄을 장소 섹션에 주입 ──
+def test_insert_meta_lines():
+    g = _gen()
+    g._current_place_meta = {"오타루 운하": {"rating": 4.5, "amount": 2000,
+        "currency": "JPY", "show_rating": True, "show_price": True}}
+    out = g._insert_meta_lines("<h2>오타루 운하</h2><p>본문</p>")
+    assert "⭐ 4.5" in out and "¥2,000" in out
+    assert "http" not in out                       # URL 없음
+    assert out.index("⭐") > out.index("</h2>")     # 헤딩 뒤에 삽입
+    # 매칭되는 헤딩 없으면 원문 그대로(조용히 생략)
+    g._current_place_meta = {"없는장소XYZ": {"rating": 3.0, "amount": None,
+        "currency": "", "show_rating": True, "show_price": True}}
+    assert g._insert_meta_lines("<h2>오타루 운하</h2>") == "<h2>오타루 운하</h2>"
+    # 메타 없으면 그대로
+    g._current_place_meta = {}
+    assert g._insert_meta_lines("<h2>x</h2>") == "<h2>x</h2>"

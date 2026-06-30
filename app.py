@@ -68,6 +68,7 @@ state = {
     "current_step": 1, "completed": set(),
     "progress": {"status": "idle", "message": "", "percent": 0},
     "settings": dict(DEFAULT_SETTINGS),
+    "plan": None,
 }
 
 
@@ -302,7 +303,7 @@ def api_status():
         "step": state["current_step"],
         "completed": list(state["completed"]),
         "photo_count": len(state["photo_results"]),
-        "group_count": len(state["selected_groups"]),
+        "group_count": len(_active_groups()),
         "progress": state["progress"],
     })
 
@@ -417,6 +418,11 @@ def api_photos_update():
 # ── 그룹 ──
 @app.route('/api/groups')
 def api_groups():
+    if state.get("plan") and state["plan"].get("days"):
+        groups = _active_groups()
+        return jsonify([{"label": g.get("label",""),
+                         "photo_count": len(g.get("photos",[])),
+                         "course_line": g.get("course_line","")} for g in groups])
     mode = request.args.get('mode', state["selected_mode"])
     if state["trip_structure"]:
         groups = state["trip_structure"].get(mode, [])
@@ -426,17 +432,137 @@ def api_groups():
     return jsonify([])
 
 
+def _is_free_mode():
+    return not bool(state["settings"]["api"].get("google_key", ""))
+
+
+def _plan_path():
+    title = (state.get("plan") or {}).get("trip_title", "") or "untitled"
+    safe = "".join(c for c in title if c.isalnum() or c in " _-").strip() or "untitled"
+    d = os.path.join("plans", safe)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "plan.json")
+
+def _save_plan():
+    if not state.get("plan"):
+        return
+    try:
+        with open(_plan_path(), "w", encoding="utf-8") as f:
+            json.dump(state["plan"], f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"plan 저장 실패: {e}")
+
+@app.route('/api/plan/draft', methods=['POST'])
+def api_plan_draft():
+    data = request.json or {}
+    if state.get("plan") and not data.get("overwrite"):
+        return jsonify({"need_confirm": True,
+                        "message": "기존 계획이 있습니다. 덮어쓸까요?"}), 409
+    if not state["photo_results"]:
+        return jsonify({"error": "사진 분석을 먼저 실행하세요"}), 400
+    from core import TripPlanner
+    free_mode = _is_free_mode()
+    state["plan"] = TripPlanner.build_draft(state["photo_results"], free_mode=free_mode)
+    _save_plan()
+    return jsonify(state["plan"])
+
+@app.route('/api/plan', methods=['GET'])
+def api_plan_get():
+    return jsonify(state.get("plan") or {})
+
+@app.route('/api/plan', methods=['POST'])
+def api_plan_post():
+    state["plan"] = request.json or {}
+    _save_plan()
+    return jsonify({"ok": True})
+
+
+def _find_stop(plan, stop_id):
+    for d in plan.get("days", []):
+        for s in d.get("stops", []):
+            if s["stop_id"] == stop_id:
+                return d, s
+    return None, None
+
+def _remove_pid_everywhere(plan, pid):
+    for d in plan.get("days", []):
+        for s in d.get("stops", []):
+            if pid in s.get("photo_ids", []):
+                s["photo_ids"].remove(pid)
+    for k in ("undated_photo_ids", "excluded_photo_ids"):
+        if pid in plan.get(k, []):
+            plan[k].remove(pid)
+
+@app.route('/api/plan/stop/move', methods=['POST'])
+def api_plan_move():
+    data = request.json or {}
+    plan = state.get("plan") or {}
+    pid, to_stop = data.get("photo_id"), data.get("to_stop_id")
+    if not pid or not to_stop:
+        return jsonify({"error": "photo_id/to_stop_id 필요"}), 400
+    _, s = _find_stop(plan, to_stop)
+    if not s:
+        return jsonify({"error": "대상 장소 없음"}), 400
+    _remove_pid_everywhere(plan, pid)
+    s.setdefault("photo_ids", []).append(pid)
+    _save_plan()
+    return jsonify({"ok": True})
+
+@app.route('/api/plan/exclude', methods=['POST'])
+def api_plan_exclude():
+    data = request.json or {}
+    plan = state.get("plan") or {}
+    pid = data.get("photo_id")
+    if not pid:
+        return jsonify({"error": "photo_id 필요"}), 400
+    _remove_pid_everywhere(plan, pid)
+    if data.get("restore"):
+        plan.setdefault("undated_photo_ids", []).append(pid)
+    else:
+        plan.setdefault("excluded_photo_ids", []).append(pid)
+    _save_plan()
+    return jsonify({"ok": True})
+
+@app.route('/api/plan/receipt', methods=['POST'])
+def api_plan_receipt():
+    from core import ReceiptReader
+    from werkzeug.utils import secure_filename
+    stop_id = request.form.get("stop_id")
+    f = request.files.get("receipt")
+    if not f or not stop_id:
+        return jsonify({"error": "stop_id/파일 필요"}), 400
+    plan = state.get("plan") or {}
+    _, s = _find_stop(plan, stop_id)
+    if not s:
+        return jsonify({"error": "대상 장소 없음 (계획을 먼저 생성하세요)"}), 400
+    rdir = os.path.join("uploads", "receipts"); os.makedirs(rdir, exist_ok=True)
+    fname = secure_filename(f"{stop_id}_{f.filename}") or "receipt.jpg"
+    path = os.path.join(rdir, fname)
+    f.save(path)
+    info = ReceiptReader(state["cfg"]).read(path)
+    info["image_path"] = path
+    s["receipt"] = info
+    suggest = ReceiptReader.crosscheck_name(info.get("store_name", ""), s.get("name", ""))
+    _save_plan()
+    return jsonify({"receipt": info, "suggest_name": suggest})
+
+
 # ── SEO ──
 @app.route('/api/seo', methods=['POST'])
 def api_seo():
     data = request.json or {}
     keyword = data.get("keyword","")
     if not keyword:
-        locs = set()
-        for r in state["photo_results"]:
-            if r.get("city"): locs.add(r["city"])
-            if r.get("region"): locs.add(r["region"])
-        keyword = " ".join(list(locs)[:2]) + " 여행" if locs else "여행"
+        plan = state.get("plan") or {}
+        region = plan.get("region","")        # E 연결점: 확정 지역명을 네이버 검색 키워드로 우선
+        if region:
+            keyword = region + " 여행"
+        else:
+            locs = set()
+            for r in state["photo_results"]:
+                if r.get("city"): locs.add(r["city"])
+                if r.get("region"): locs.add(r["region"])
+            keyword = " ".join(list(locs)[:2]) + " 여행" if locs else "여행"
     try:
         nba = NaverBlogAnalyzer(state["cfg"])
         analysis = nba.analyze(keyword)
@@ -502,6 +628,17 @@ def _apply_settings_to_generator():
     state["generator"]._custom_style_prompt = "\n".join(parts)
 
 
+def _active_groups():
+    """plan이 있으면 확정 plan 기반 Day 그룹, 없으면 기존 selected_groups."""
+    plan = state.get("plan")
+    if plan and plan.get("days"):
+        from core import TripPlanner
+        g = TripPlanner.groups_from_plan(plan, state["photo_results"])
+        if g:
+            return g
+    return state["selected_groups"]
+
+
 # ── AI 생성 (단일 그룹) ──
 @app.route('/api/generate', methods=['POST'])
 def api_generate():
@@ -511,14 +648,15 @@ def api_generate():
     structure = data.get("structure","감성 후기형")
     place_memos = data.get("place_memos",{})
     route_modes = data.get("route_modes",{})
-    if gi >= len(state["selected_groups"]):
+    groups = _active_groups()
+    if gi >= len(groups):
         return jsonify({"error":"잘못된 그룹"}), 400
     def task():
         state["progress"] = {"status":"generating","message":"AI 초안 생성 중...","percent":0}
         try:
             _apply_settings_to_generator()
-            g = state["selected_groups"][gi]
-            tmp = dict(g); tmp["place_memos"] = place_memos
+            g = groups[gi]
+            tmp = dict(g); tmp["place_memos"] = {**g.get("place_memos", {}), **(data.get("place_memos") or {})}
             dr = state["generator"].generate_drafts(
                 tmp, g["label"], title,
                 state["naver_analysis"], state["style_analysis"],
@@ -541,7 +679,8 @@ def api_generate_all():
     structure = data.get("structure","감성 후기형")
     place_memos = data.get("place_memos",{})
     route_modes = data.get("route_modes",{})
-    total = len(state["selected_groups"])
+    groups = _active_groups()
+    total = len(groups)
     if total == 0:
         return jsonify({"error":"그룹 없음"}), 400
     def task():
@@ -549,11 +688,11 @@ def api_generate_all():
         try:
             _apply_settings_to_generator()
             for gi in range(total):
-                g = state["selected_groups"][gi]
+                g = groups[gi]
                 state["progress"] = {"status":"generating",
                     "message":f"[{gi+1}/{total}] {g.get('label','')} 생성 중...",
                     "percent":int((gi/total)*100)}
-                tmp = dict(g); tmp["place_memos"] = place_memos
+                tmp = dict(g); tmp["place_memos"] = {**g.get("place_memos", {}), **(data.get("place_memos") or {})}
                 dr = state["generator"].generate_drafts(
                     tmp, g["label"], title,
                     state["naver_analysis"], state["style_analysis"],
@@ -584,7 +723,8 @@ def api_blocks(gi, di):
     drafts = gs.get("drafts",[])
     if di >= len(drafts): return jsonify({"error":"잘못된 인덱스"}), 400
     d = drafts[di]
-    photos = state["selected_groups"][gi].get("photos",[]) if gi<len(state["selected_groups"]) else []
+    groups = _active_groups()
+    photos = groups[gi].get("photos", []) if gi < len(groups) else []
     blocks = html_to_blocks(d.get("content",""), photos)
     return jsonify({"title":d.get("title",""),"tags":d.get("tags",[]),"blocks":blocks})
 
