@@ -1643,6 +1643,20 @@ class TravelBlogGenerator:
         self.client = OpenAI(api_key=config.get("openai","api_key"))
         self.google_key = config.get("google","maps_api_key") or ""
 
+    _CUR_SYM = {"JPY": "¥", "KRW": "₩", "USD": "$"}
+
+    def _format_meta_line(self, rating, amount, currency, show_rating, show_price):
+        """별점·가격을 텍스트 한 줄 HTML로. URL 없음. 표시할 게 없으면 ''."""
+        parts = []
+        if show_rating and rating is not None:
+            parts.append(f"⭐ {rating:g}")
+        if show_price and amount is not None:
+            sym = self._CUR_SYM.get(currency, "")
+            parts.append(f"{sym}{amount:,}")
+        if not parts:
+            return ""
+        return '<p>' + ' / '.join(parts) + '</p>'
+
     # ─────────────────────────────────────────
     # 초안 3종 생성
     # ─────────────────────────────────────────

@@ -261,3 +261,19 @@ def test_receipt_crosscheck_name():
     assert ReceiptReader.crosscheck_name("스타벅스 삿포로점", "스타벅스") is True
     assert ReceiptReader.crosscheck_name("스타벅스", "") is False
     assert ReceiptReader.crosscheck_name("", "스타벅스") is False
+
+
+# ── 생성: 별점·가격 한 줄 조립(코드가 HTML 조립) ──
+def _gen():
+    return TravelBlogGenerator(Config())
+
+def test_format_meta_line():
+    g = _gen()
+    line = g._format_meta_line(rating=4.5, amount=2000, currency="JPY",
+                               show_rating=True, show_price=True)
+    assert "4.5" in line and "¥2,000" in line
+    assert "http" not in line   # URL 절대 없음(SE3 링크카드 방지)
+    assert g._format_meta_line(4.5, 2000, "JPY", False, False) == ""
+    only_rating = g._format_meta_line(4.5, 2000, "JPY", True, False)
+    assert "4.5" in only_rating and "2,000" not in only_rating
+    assert g._format_meta_line(None, None, "", True, True) == ""
