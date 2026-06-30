@@ -1494,27 +1494,25 @@ class TripPlanner:
 
     @staticmethod
     def build_draft(photo_results, free_mode=False):
-        """photo_results -> TripPlan dict (검수 전 초안)."""
-        from collections import OrderedDict
+        """photo_results → TripPlan dict (검수 전 초안). 입력 dict를 변형하지 않음."""
         region = ""
         for r in photo_results:
             if r.get("region"):
                 region = r["region"]; break
 
-        day_map = OrderedDict()
+        day_map = {}
         undated = []
         for r in photo_results:
-            day = TripPlanner._assign_day(r.get("exif_date", ""))
             pid = TripPlanner._photo_id(r.get("file_path", ""))
-            r["_pid"] = pid
+            day = TripPlanner._assign_day(r.get("exif_date", ""))
             if day is None:
                 undated.append(pid)
             else:
-                day_map.setdefault(day, []).append(r)
+                day_map.setdefault(day, []).append((pid, r))
 
         days = []
-        for day_no, (date_key, photos) in enumerate(sorted(day_map.items()), 1):
-            stops = TripPlanner._stops_for_day(photos)
+        for day_no, (date_key, items) in enumerate(sorted(day_map.items()), 1):
+            stops = TripPlanner._stops_for_day(items)
             days.append({"day_no": day_no, "date": date_key, "stops": stops})
 
         return {
@@ -1529,29 +1527,30 @@ class TripPlanner:
         }
 
     @staticmethod
-    def _stops_for_day(photos):
-        """하루치 사진 -> 장소(stop) 목록. 같은 location_name끼리 묶음(빈 이름은 개별 stop)."""
-        groups = []       # [(name, [photos])]
-        index = {}        # name -> groups idx
-        for p in photos:
+    def _stops_for_day(items):
+        """하루치 (pid, photo) 튜플 목록 → 장소(stop) 목록.
+        같은 location_name끼리 묶음(빈 이름은 개별 stop). 입력 dict 비변형."""
+        groups = []       # [(name, [pids])]
+        index = {}        # name → groups idx
+        for pid, p in items:
             name = p.get("location_name", "") if p.get("name_confident") else ""
             if name and name in index:
-                groups[index[name]][1].append(p)
+                groups[index[name]][1].append(pid)
             else:
                 if name:
                     index[name] = len(groups)
-                groups.append((name, [p]))
+                groups.append((name, [pid]))
         stops = []
-        for order, (name, ps) in enumerate(groups, 1):
+        for order, (name, pids) in enumerate(groups, 1):
             stops.append({
-                "stop_id": "s" + ps[0]["_pid"][1:],
+                "stop_id": "s" + pids[0][1:],
                 "order": order,
                 "name": name,
                 "name_source": "auto" if name else "none",
                 "events": [], "feeling": "", "ai_instruction": "",
                 "rating": None, "receipt": None,
                 "show_rating": True, "show_price": True,
-                "photo_ids": [p["_pid"] for p in ps],
+                "photo_ids": list(pids),
             })
         return stops
 

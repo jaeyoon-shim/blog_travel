@@ -231,3 +231,16 @@ def test_build_draft_days_and_unconfident_name_blanked():
              for d in plan["days"] for s in d["stops"]}
     assert "오타루 운하" in names and names["오타루 운하"] == "auto"
     assert "" in names and names[""] == "none"
+
+
+def test_build_draft_merges_same_name_and_no_mutation():
+    photos = [
+        _pr("u/x.jpg", "2026:06:22 09:00:00", "스타벅스 삿포로", True),
+        _pr("u/y.jpg", "2026:06:22 18:00:00", "스타벅스 삿포로", True),
+    ]
+    plan = TripPlanner.build_draft(photos)
+    stops = plan["days"][0]["stops"]
+    same = [s for s in stops if s["name"] == "스타벅스 삿포로"]
+    assert len(same) == 1 and len(same[0]["photo_ids"]) == 2
+    # 입력 dict가 변형되지 않아야 함 (_pid 누출 금지)
+    assert "_pid" not in photos[0]
