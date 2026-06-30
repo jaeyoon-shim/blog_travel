@@ -93,7 +93,7 @@ textarea{resize:vertical;min-height:50px;line-height:1.5}
     <div class="logo">✈ TravelBlog Pro</div>
     <div class="steps" id="steps">
       <button class="step-btn active" data-step="1">1. 업로드</button>
-      <button class="step-btn" data-step="2">2. 구조</button>
+      <button class="step-btn" data-step="2">2. 계획검수</button>
       <button class="step-btn" data-step="3">3. AI생성</button>
       <button class="step-btn" data-step="4">4. 편집</button>
       <button class="step-btn" data-step="5">5. 발행</button>
@@ -130,7 +130,7 @@ const API='';
 // ── 상태 ──
 let step=1, photos=[], groups=[], drafts=[], blocks=[], selBlock=-1;
 let curGroup=0, curDraft=0, draftTitle='', draftTags=[];
-let tripTitle='', selMode='by_place', placeMemos={}, routeModes={}, refUrls=[];
+let tripTitle='', selMode='by_place', placeMemos={}, routeModes={}, refUrls=[], planData=null;
 let settings={}, pollTimer=null;
 
 // ── DOM ──
@@ -380,16 +380,68 @@ async function uploadFiles(files){
 async function doAnalyze(){show('사진 분석 중...');await fetch(`${API}/api/analyze`,{method:'POST'});
   startPoll(async p=>{if(p.status==='done'){const r=await fetch(`${API}/api/photos`);photos=await r.json();go(2)}})}
 
-// ═══ STEP 2: 구조 ═══
-function renderS2(){$et.textContent='🗂 구조 설정';$badge.textContent='STEP 2';
+// ═══ STEP 2: 계획 검수 ═══
+function renderS2(){$et.textContent='🗂 계획 검수';$badge.textContent='STEP 2';
 $eb.innerHTML=`
-<div class="card"><div class="card-label">그루핑 모드</div><select id="modeSel" onchange="chMode()"><option value="by_place" ${selMode==='by_place'?'selected':''}>장소별</option><option value="by_day" ${selMode==='by_day'?'selected':''}>일별</option><option value="by_course" ${selMode==='by_course'?'selected':''}>코스별</option></select></div>
+<div id="planBanner" class="card" style="display:none;background:#5a3a3a;color:#ffd;border-color:#7a4a4a">무료 모드 — 상호명 정확도 낮음, 검수 권장</div>
 <div class="card"><div class="card-label">여행 제목</div><input type="text" id="tt" value="${esc(tripTitle)}" placeholder="예: 후쿠오카 2박3일" oninput="tripTitle=this.value"></div>
-<div class="card"><div class="card-label">참고 블로그 URL (여러 개)</div><div id="refList"></div><div class="flex gap-6 mt-6"><input type="text" id="refIn" placeholder="https://blog.naver.com/..." style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addRef()}"><button class="btn btn-ghost btn-sm" onclick="addRef()">+ 추가</button></div><button class="btn btn-ghost btn-sm mt-6" onclick="doStyle()">🔍 스타일 분석 ${refUrls.length?'('+refUrls.length+'개)':''}</button></div>
-<div id="grpList" class="mt-8"></div>
-<div class="card-label mt-12">📸 사진별 장소명 편집</div><div class="text-xs text-fg3 mb-6">GPS 자동 인식 장소명을 수정할 수 있습니다</div><div id="peList"></div>
-<button class="btn btn-pri w-full mt-12" onclick="go(3)">다음: AI 생성 →</button>`;
-renderRefs();loadGrps();renderPE()}
+<div class="card"><div class="card-label">참고 블로그 URL (문체 분석)</div><div id="refList"></div><div class="flex gap-6 mt-6"><input type="text" id="refIn" placeholder="https://blog.naver.com/..." style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addRef()}"><button class="btn btn-ghost btn-sm" onclick="addRef()">+ 추가</button></div><button class="btn btn-ghost btn-sm mt-6" onclick="doStyle()">🔍 스타일 분석 ${refUrls.length?'('+refUrls.length+'개)':''}</button></div>
+<div id="planRoot"><div class="text-xs text-fg3">불러오는 중...</div></div>
+<button class="btn btn-pri w-full mt-12" onclick="nextFromPlan()">다음: AI 생성 →</button>`;
+renderRefs();loadPlan()}
+
+async function loadPlan(){
+  let r=await fetch(`${API}/api/plan`);let p=await r.json();
+  if(!p.days){
+    r=await fetch(`${API}/api/plan/draft`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{"overwrite":true}'});
+    if(!r.ok){const pr=document.getElementById('planRoot');if(pr)pr.innerHTML='<div class="text-xs" style="color:var(--err)">계획 생성 실패 — 사진 분석을 먼저 하세요.</div>';return}
+    p=await r.json();
+  }
+  planData=p;
+  const b=document.getElementById('planBanner');if(b)b.style.display=p.free_mode?'block':'none';
+  if(p.trip_title&&!tripTitle){tripTitle=p.trip_title;const tt=document.getElementById('tt');if(tt)tt.value=tripTitle}
+  renderPlan(p)}
+
+function renderPlan(p){const root=document.getElementById('planRoot');if(!root)return;
+  if(!p.days||!p.days.length){root.innerHTML='<div class="text-xs text-fg3">계획이 비어 있습니다.</div>';return}
+  root.innerHTML=p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>stopCard(s)).join('')}</div>`).join('')
+    +((p.undated_photo_ids&&p.undated_photo_ids.length)?`<div class="text-xs text-fg3 mt-6">📅 날짜 미상 사진 ${p.undated_photo_ids.length}장</div>`:'')}
+
+function stopCard(s){const rc=s.receipt||null;
+  return `<div class="stop" data-stop="${esc(s.stop_id)}" style="border-top:1px solid var(--bd);padding:6px 0;margin-top:6px">
+  <input class="f-name" value="${esc(s.name)}" placeholder="장소 이름" style="font-weight:600;font-size:13px;width:100%;margin-bottom:4px">
+  <textarea class="f-events" placeholder="핵심 사건(줄바꿈으로 여러 개)" style="width:100%;font-size:11px;min-height:34px">${esc((s.events||[]).join('\n'))}</textarea>
+  <textarea class="f-feeling" placeholder="느낀점/분위기" style="width:100%;font-size:11px;min-height:28px">${esc(s.feeling)}</textarea>
+  <input class="f-ai" value="${esc(s.ai_instruction)}" placeholder="AI 작성 지시(선택)" style="width:100%;font-size:11px;margin-bottom:4px">
+  <div class="flex items-center gap-6" style="margin-bottom:4px"><span class="text-xs text-fg2">⭐ 별점</span><input class="f-rating" type="number" min="0" max="5" step="0.5" value="${s.rating==null?'':s.rating}" style="width:70px"><span class="text-xs text-fg3">사진 ${(s.photo_ids||[]).length}장</span></div>
+  <div style="font-size:11px">🧾 <input type="file" accept="image/*" onchange="if(this.files[0])uploadReceipt('${esc(s.stop_id)}',this.files[0])"> <span style="color:#9c9">${rc?esc(receiptText(rc)):''}</span></div>
+  </div>`}
+
+function receiptText(r){if(!r)return '';const a=(r.amount!=null)?` ${r.currency||''}${r.amount}`:'';return `${r.store_name||''}${a}`.trim()}
+
+function findStop(p,sid){if(!p||!p.days)return null;for(const d of p.days)for(const s of (d.stops||[]))if(s.stop_id===sid)return s;return null}
+
+function collectPlan(){if(!planData)return;
+  if(typeof tripTitle==='string')planData.trip_title=tripTitle;
+  document.querySelectorAll('.stop').forEach(el=>{const s=findStop(planData,el.dataset.stop);if(!s)return;
+    s.name=el.querySelector('.f-name').value.trim();s.name_source=s.name?'user':'none';
+    s.events=el.querySelector('.f-events').value.split('\n').map(x=>x.trim()).filter(Boolean);
+    s.feeling=el.querySelector('.f-feeling').value.trim();
+    s.ai_instruction=el.querySelector('.f-ai').value.trim();
+    const rv=el.querySelector('.f-rating').value;s.rating=rv===''?null:parseFloat(rv)})}
+
+async function savePlan(){collectPlan();await fetch(`${API}/api/plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(planData)})}
+
+async function reloadPlan(){const r=await fetch(`${API}/api/plan`);planData=await r.json();renderPlan(planData)}
+
+async function uploadReceipt(sid,file){await savePlan();const fd=new FormData();fd.append('stop_id',sid);fd.append('receipt',file);
+  stat('영수증 인식 중...',true);
+  try{const r=await fetch(`${API}/api/plan/receipt`,{method:'POST',body:fd});const j=await r.json();
+    stat('✅ 영수증 처리');if(j&&j.suggest_name)alert('영수증 가게명이 장소명과 비슷합니다 — 반영 검토: '+((j.receipt&&j.receipt.store_name)||''));
+  }catch(e){stat('❌ 영수증 실패')}
+  await reloadPlan()}
+
+async function nextFromPlan(){await savePlan();try{await loadGrps()}catch(e){}go(3)}
 
 function renderRefs(){const c=document.getElementById('refList');if(!c)return;
 c.innerHTML=refUrls.length?refUrls.map((u,i)=>`<div class="flex items-center gap-6" style="margin-bottom:3px"><span class="text-xs text-fg2" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u)}">🔗 ${esc(u)}</span><button class="ba-btn" onclick="refUrls.splice(${i},1);renderRefs()">×</button></div>`).join(''):'<div class="text-xs text-fg3">아직 없음</div>'}
