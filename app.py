@@ -482,7 +482,7 @@ def _find_stop(plan, stop_id):
 def _remove_pid_everywhere(plan, pid):
     for d in plan.get("days", []):
         for s in d.get("stops", []):
-            if pid in s["photo_ids"]:
+            if pid in s.get("photo_ids", []):
                 s["photo_ids"].remove(pid)
     for k in ("undated_photo_ids", "excluded_photo_ids"):
         if pid in plan.get(k, []):
@@ -493,11 +493,13 @@ def api_plan_move():
     data = request.json or {}
     plan = state.get("plan") or {}
     pid, to_stop = data.get("photo_id"), data.get("to_stop_id")
+    if not pid or not to_stop:
+        return jsonify({"error": "photo_id/to_stop_id 필요"}), 400
     _, s = _find_stop(plan, to_stop)
     if not s:
         return jsonify({"error": "대상 장소 없음"}), 400
     _remove_pid_everywhere(plan, pid)
-    s["photo_ids"].append(pid)
+    s.setdefault("photo_ids", []).append(pid)
     _save_plan()
     return jsonify({"ok": True})
 
@@ -506,6 +508,8 @@ def api_plan_exclude():
     data = request.json or {}
     plan = state.get("plan") or {}
     pid = data.get("photo_id")
+    if not pid:
+        return jsonify({"error": "photo_id 필요"}), 400
     _remove_pid_everywhere(plan, pid)
     if data.get("restore"):
         plan.setdefault("undated_photo_ids", []).append(pid)
@@ -517,22 +521,24 @@ def api_plan_exclude():
 @app.route('/api/plan/receipt', methods=['POST'])
 def api_plan_receipt():
     from core import ReceiptReader
+    from werkzeug.utils import secure_filename
     stop_id = request.form.get("stop_id")
     f = request.files.get("receipt")
     if not f or not stop_id:
         return jsonify({"error": "stop_id/파일 필요"}), 400
+    plan = state.get("plan") or {}
+    _, s = _find_stop(plan, stop_id)
+    if not s:
+        return jsonify({"error": "대상 장소 없음 (계획을 먼저 생성하세요)"}), 400
     rdir = os.path.join("uploads", "receipts"); os.makedirs(rdir, exist_ok=True)
-    path = os.path.join(rdir, f"{stop_id}_{f.filename}")
+    fname = secure_filename(f"{stop_id}_{f.filename}") or "receipt.jpg"
+    path = os.path.join(rdir, fname)
     f.save(path)
     info = ReceiptReader(state["cfg"]).read(path)
     info["image_path"] = path
-    plan = state.get("plan") or {}
-    _, s = _find_stop(plan, stop_id)
-    suggest = False
-    if s:
-        s["receipt"] = info
-        suggest = ReceiptReader.crosscheck_name(info.get("store_name", ""), s.get("name", ""))
-        _save_plan()
+    s["receipt"] = info
+    suggest = ReceiptReader.crosscheck_name(info.get("store_name", ""), s.get("name", ""))
+    _save_plan()
     return jsonify({"receipt": info, "suggest_name": suggest})
 
 
