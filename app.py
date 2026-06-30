@@ -68,7 +68,7 @@ state = {
     "current_step": 1, "completed": set(),
     "progress": {"status": "idle", "message": "", "percent": 0},
     "settings": dict(DEFAULT_SETTINGS),
-    "plan": None, "plan_dir": None,
+    "plan": None,
 }
 
 
@@ -441,8 +441,11 @@ def _plan_path():
 def _save_plan():
     if not state.get("plan"):
         return
-    with open(_plan_path(), "w", encoding="utf-8") as f:
-        json.dump(state["plan"], f, ensure_ascii=False, indent=2)
+    try:
+        with open(_plan_path(), "w", encoding="utf-8") as f:
+            json.dump(state["plan"], f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"plan 저장 실패: {e}")
 
 @app.route('/api/plan/draft', methods=['POST'])
 def api_plan_draft():
@@ -450,6 +453,8 @@ def api_plan_draft():
     if state.get("plan") and not data.get("overwrite"):
         return jsonify({"need_confirm": True,
                         "message": "기존 계획이 있습니다. 덮어쓸까요?"}), 409
+    if not state["photo_results"]:
+        return jsonify({"error": "사진 분석을 먼저 실행하세요"}), 400
     from core import TripPlanner
     free_mode = _is_free_mode()
     state["plan"] = TripPlanner.build_draft(state["photo_results"], free_mode=free_mode)
