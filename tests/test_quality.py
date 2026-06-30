@@ -277,3 +277,22 @@ def test_format_meta_line():
     only_rating = g._format_meta_line(4.5, 2000, "JPY", True, False)
     assert "4.5" in only_rating and "2,000" not in only_rating
     assert g._format_meta_line(None, None, "", True, True) == ""
+
+
+# ── 생성 배선: 확정 plan → 생성기 그룹 ──
+def test_groups_from_plan():
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True),
+        _pr("u/b.jpg", "2026:06:22 11:00:00", "동네 카페", False),
+    ]
+    plan = TripPlanner.build_draft(photos)
+    st = plan["days"][0]["stops"][0]   # 확신 장소 "오타루 운하"
+    st["name"] = "오타루 운하"; st["name_source"] = "user"
+    st["events"] = ["산책"]; st["feeling"] = "로맨틱"; st["rating"] = 4.5
+    groups = TripPlanner.groups_from_plan(plan, photos)
+    assert len(groups) == 1
+    g = groups[0]
+    assert g["place_memos"]["오타루 운하"].startswith("사건:")
+    assert g["place_meta"]["오타루 운하"]["rating"] == 4.5
+    assert any(p["location_name"] == "오타루 운하" for p in g["photos"])
+    assert "_pid" not in photos[0]   # 원본 photo_results 비변형

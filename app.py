@@ -618,6 +618,17 @@ def _apply_settings_to_generator():
     state["generator"]._custom_style_prompt = "\n".join(parts)
 
 
+def _active_groups():
+    """plan이 있으면 확정 plan 기반 Day 그룹, 없으면 기존 selected_groups."""
+    plan = state.get("plan")
+    if plan and plan.get("days"):
+        from core import TripPlanner
+        g = TripPlanner.groups_from_plan(plan, state["photo_results"])
+        if g:
+            return g
+    return state["selected_groups"]
+
+
 # ── AI 생성 (단일 그룹) ──
 @app.route('/api/generate', methods=['POST'])
 def api_generate():
@@ -627,13 +638,14 @@ def api_generate():
     structure = data.get("structure","감성 후기형")
     place_memos = data.get("place_memos",{})
     route_modes = data.get("route_modes",{})
-    if gi >= len(state["selected_groups"]):
+    groups = _active_groups()
+    if gi >= len(groups):
         return jsonify({"error":"잘못된 그룹"}), 400
     def task():
         state["progress"] = {"status":"generating","message":"AI 초안 생성 중...","percent":0}
         try:
             _apply_settings_to_generator()
-            g = state["selected_groups"][gi]
+            g = groups[gi]
             tmp = dict(g); tmp["place_memos"] = place_memos
             dr = state["generator"].generate_drafts(
                 tmp, g["label"], title,
@@ -657,7 +669,8 @@ def api_generate_all():
     structure = data.get("structure","감성 후기형")
     place_memos = data.get("place_memos",{})
     route_modes = data.get("route_modes",{})
-    total = len(state["selected_groups"])
+    groups = _active_groups()
+    total = len(groups)
     if total == 0:
         return jsonify({"error":"그룹 없음"}), 400
     def task():
@@ -665,7 +678,7 @@ def api_generate_all():
         try:
             _apply_settings_to_generator()
             for gi in range(total):
-                g = state["selected_groups"][gi]
+                g = groups[gi]
                 state["progress"] = {"status":"generating",
                     "message":f"[{gi+1}/{total}] {g.get('label','')} 생성 중...",
                     "percent":int((gi/total)*100)}

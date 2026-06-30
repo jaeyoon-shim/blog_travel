@@ -1527,6 +1527,58 @@ class TripPlanner:
         }
 
     @staticmethod
+    def groups_from_plan(plan, photo_results):
+        """확정 plan + 원본 photo_results → 생성기용 Day별 그룹 리스트.
+        photo_results를 변형하지 않음(복사본에 확정 장소명 덮어씀). 네트워크 미사용.
+        place_meta는 별점·가격 줄용으로 그룹에 실어두되 이 단계에선 소비하지 않음."""
+        by_pid = {}
+        for r in photo_results:
+            by_pid[TripPlanner._photo_id(r.get("file_path", ""))] = r
+        groups = []
+        for d in plan.get("days", []):
+            photos, memos, meta, names = [], {}, {}, []
+            for s in d.get("stops", []):
+                name = s.get("name", "") or "미확인"
+                if name not in names:
+                    names.append(name)
+                bits = []
+                if s.get("events"):
+                    bits.append("사건: " + "; ".join(s["events"]))
+                if s.get("feeling"):
+                    bits.append("느낌: " + s["feeling"])
+                if s.get("ai_instruction"):
+                    bits.append("지시: " + s["ai_instruction"])
+                if bits:
+                    memos[name] = " / ".join(bits)
+                rc = s.get("receipt") or {}
+                meta[name] = {
+                    "rating": s.get("rating"),
+                    "amount": rc.get("amount"),
+                    "currency": rc.get("currency", ""),
+                    "show_rating": s.get("show_rating", True),
+                    "show_price": s.get("show_price", True),
+                }
+                for pid in s.get("photo_ids", []):
+                    r = by_pid.get(pid)
+                    if not r:
+                        continue
+                    rc2 = dict(r)
+                    if s.get("name"):
+                        rc2["location_name"] = s["name"]
+                    photos.append(rc2)
+            if not photos:
+                continue
+            groups.append({
+                "group_id": d.get("day_no", len(groups) + 1),
+                "label": f"{d.get('day_no','')}일차",
+                "photos": photos,
+                "course_line": " → ".join(names),
+                "place_memos": memos,
+                "place_meta": meta,
+            })
+        return groups
+
+    @staticmethod
     def _stops_for_day(items):
         """하루치 (pid, photo) 튜플 목록 → 장소(stop) 목록.
         같은 location_name끼리 묶음(빈 이름은 개별 stop). 입력 dict 비변형."""
