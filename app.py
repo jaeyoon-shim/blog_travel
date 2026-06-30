@@ -418,6 +418,11 @@ def api_photos_update():
 # ── 그룹 ──
 @app.route('/api/groups')
 def api_groups():
+    if state.get("plan") and state["plan"].get("days"):
+        groups = _active_groups()
+        return jsonify([{"label": g.get("label",""),
+                         "photo_count": len(g.get("photos",[])),
+                         "course_line": g.get("course_line","")} for g in groups])
     mode = request.args.get('mode', state["selected_mode"])
     if state["trip_structure"]:
         groups = state["trip_structure"].get(mode, [])
@@ -646,7 +651,7 @@ def api_generate():
         try:
             _apply_settings_to_generator()
             g = groups[gi]
-            tmp = dict(g); tmp["place_memos"] = place_memos
+            tmp = dict(g); tmp["place_memos"] = {**g.get("place_memos", {}), **(data.get("place_memos") or {})}
             dr = state["generator"].generate_drafts(
                 tmp, g["label"], title,
                 state["naver_analysis"], state["style_analysis"],
@@ -682,7 +687,7 @@ def api_generate_all():
                 state["progress"] = {"status":"generating",
                     "message":f"[{gi+1}/{total}] {g.get('label','')} 생성 중...",
                     "percent":int((gi/total)*100)}
-                tmp = dict(g); tmp["place_memos"] = place_memos
+                tmp = dict(g); tmp["place_memos"] = {**g.get("place_memos", {}), **(data.get("place_memos") or {})}
                 dr = state["generator"].generate_drafts(
                     tmp, g["label"], title,
                     state["naver_analysis"], state["style_analysis"],
@@ -713,7 +718,8 @@ def api_blocks(gi, di):
     drafts = gs.get("drafts",[])
     if di >= len(drafts): return jsonify({"error":"잘못된 인덱스"}), 400
     d = drafts[di]
-    photos = state["selected_groups"][gi].get("photos",[]) if gi<len(state["selected_groups"]) else []
+    groups = _active_groups()
+    photos = groups[gi].get("photos", []) if gi < len(groups) else []
     blocks = html_to_blocks(d.get("content",""), photos)
     return jsonify({"title":d.get("title",""),"tags":d.get("tags",[]),"blocks":blocks})
 

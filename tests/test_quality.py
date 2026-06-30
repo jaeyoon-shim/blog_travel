@@ -287,12 +287,12 @@ def test_groups_from_plan():
     ]
     plan = TripPlanner.build_draft(photos)
     st = plan["days"][0]["stops"][0]   # 확신 장소 "오타루 운하"
-    st["name"] = "오타루 운하"; st["name_source"] = "user"
+    st["name"] = "오타루 운하 본점"; st["name_source"] = "user"
     st["events"] = ["산책"]; st["feeling"] = "로맨틱"; st["rating"] = 4.5
     groups = TripPlanner.groups_from_plan(plan, photos)
     assert len(groups) == 1
     g = groups[0]
-    assert g["place_memos"]["오타루 운하"].startswith("사건:")
-    assert g["place_meta"]["오타루 운하"]["rating"] == 4.5
-    assert any(p["location_name"] == "오타루 운하" for p in g["photos"])
-    assert "_pid" not in photos[0]   # 원본 photo_results 비변형
+    assert g["place_memos"]["오타루 운하 본점"].startswith("사건:")
+    assert g["place_meta"]["오타루 운하 본점"]["rating"] == 4.5
+    assert any(p["location_name"] == "오타루 운하 본점" for p in g["photos"])
+    assert photos[0]["location_name"] == "오타루 운하"   # 원본 비변형(덮어쓰기는 복사본에만)
