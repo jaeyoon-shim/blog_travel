@@ -335,7 +335,6 @@ function updateSettingsPreview(bs,ds,cp){
     ${cp.extra_instructions?`<div style="margin:12px 0;padding:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:11px;color:#92400e"><strong>추가 지시:</strong> ${esc(cp.extra_instructions)}</div>`:''}
     ${cp.banned_expressions?`<div style="margin:8px 0;padding:10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:11px;color:#991b1b"><strong>금지:</strong> ${esc(cp.banned_expressions)}</div>`:''}
   </div>`;
-}
   sRenderUrls();
 }
 function sRenderUrls(){const c=document.getElementById('s_urls');if(!c)return;c.innerHTML=refUrls.length?refUrls.map((u,i)=>`<div class="flex items-center gap-6" style="margin-bottom:3px"><span class="text-xs text-fg2" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u)}</span><button class="ba-btn" onclick="refUrls.splice(${i},1);sRenderUrls()">×</button></div>`).join(''):'<div class="text-xs text-fg3">없음</div>'}
