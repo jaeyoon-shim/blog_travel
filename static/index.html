@@ -424,6 +424,8 @@ async function loadPlan(){
     p=await r.json();
   }
   planData=p;
+  if(!photos||!photos.length){ try{const pr=await fetch(`${API}/api/photos`); photos=await pr.json();}catch(e){} }
+  window._pidMap={}; (photos||[]).forEach(p2=>{ if(p2&&p2.pid) window._pidMap[p2.pid]=p2; });
   const b=document.getElementById('planBanner');if(b)b.style.display=p.free_mode?'block':'none';
   if(p.trip_title&&!tripTitle){tripTitle=p.trip_title;const tt=document.getElementById('tt');if(tt)tt.value=tripTitle}
   renderPlan(p)}
@@ -435,13 +437,27 @@ function renderPlan(p){const root=document.getElementById('planRoot');if(!root)r
   root.innerHTML=unHtml+p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>stopCard(s)).join('')}</div>`).join('')
     +((p.undated_photo_ids&&p.undated_photo_ids.length)?`<div class="text-xs text-fg3 mt-6">📅 날짜 미상 사진 ${p.undated_photo_ids.length}장</div>`:'')}
 
+function stopThumbs(s){
+  const ids=(s.photo_ids||[]); if(!ids.length)return '';
+  return `<div style="display:flex;gap:4px;flex-wrap:wrap;margin:4px 0">`+ids.map(pid=>{
+    const p=(window._pidMap||{})[pid];
+    return (p&&p.thumbnail)
+      ?`<img src="${p.thumbnail}" title="${esc((p.file_name||'')+(p.scene_description?' · '+p.scene_description:''))}" style="width:56px;height:56px;object-fit:cover;border-radius:6px;border:1px solid var(--bd)">`
+      :`<div style="width:56px;height:56px;border-radius:6px;background:var(--sf3);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--fg3)">사진</div>`;
+  }).join('')+`</div>`;
+}
+function stopHints(s){
+  const hs=(s.photo_ids||[]).map(pid=>((window._pidMap||{})[pid]||{}).scene_description).filter(Boolean);
+  return hs.length?`<div class="text-xs text-fg3" style="margin-bottom:4px">💬 ${esc(hs.join(' · '))}</div>`:'';
+}
 function stopCard(s){const rc=s.receipt||null;
   return `<div class="stop" data-stop="${esc(s.stop_id)}" style="border-top:1px solid var(--bd);padding:6px 0;margin-top:6px">
-  <input class="f-name" value="${esc(s.name)}" placeholder="장소 이름" style="font-weight:600;font-size:13px;width:100%;margin-bottom:4px">
-  <textarea class="f-events" placeholder="핵심 사건(줄바꿈으로 여러 개)" style="width:100%;font-size:11px;min-height:34px">${esc((s.events||[]).join('\n'))}</textarea>
+  <input class="f-name" value="${esc(s.name)}" placeholder="장소 이름 (사진 보고 입력)" style="font-weight:600;font-size:13px;width:100%;margin-bottom:4px">
+  ${stopThumbs(s)}${stopHints(s)}
+  <textarea class="f-events" placeholder="여기서 뭘 했는지 (사진 참고)" style="width:100%;font-size:11px;min-height:34px">${esc((s.events||[]).join('\n'))}</textarea>
   <textarea class="f-feeling" placeholder="느낀점/분위기" style="width:100%;font-size:11px;min-height:28px">${esc(s.feeling)}</textarea>
   <input class="f-ai" value="${esc(s.ai_instruction)}" placeholder="AI 작성 지시(선택)" style="width:100%;font-size:11px;margin-bottom:4px">
-  <div class="flex items-center gap-6" style="margin-bottom:4px"><span class="text-xs text-fg2">⭐ 별점</span><input class="f-rating" type="number" min="0" max="5" step="0.5" value="${s.rating==null?'':s.rating}" style="width:70px"><span class="text-xs text-fg3">사진 ${(s.photo_ids||[]).length}장</span></div>
+  <div class="flex items-center gap-6" style="margin-bottom:4px"><span class="text-xs text-fg2">⭐ 별점</span><input class="f-rating" type="number" min="0" max="5" step="0.5" value="${s.rating==null?'':s.rating}" style="width:70px"></div>
   ${s.receipt?`<div style="margin-top:4px;font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="color:#9c9">🧾 ${esc(s.receipt.store_name||'(가게명?)')} ${s.receipt.amount!=null?esc((s.receipt.currency||'')+s.receipt.amount):''}</span><select onchange="reassignReceipt('${esc(s.stop_id)}',this.value)" style="font-size:11px;max-width:200px">${stopOptions(s.stop_id)}<option value="__none__">— 미배정 —</option></select></div>`:''}
   </div>`}
 
