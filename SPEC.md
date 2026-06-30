@@ -64,7 +64,7 @@
             │                                     → TripStructurer.structure()
             │                                       (by_day / by_place / by_course)
             │
-[STEP 3] 계획 검수 + SEO    POST /api/plan, /api/plan/confirm  → TripPlanner 초안 → 사용자 확정
+[STEP 3] 계획 검수 + SEO    POST /api/plan/draft, /api/plan  → TripPlanner 초안 → 사용자 확정
             │              POST /api/seo, /api/style              → NaverBlogAnalyzer / StyleAnalyzer
             │                                       · 계획 검수: 일정/장소명/사건/느낌/별점/영수증 확정 → plans/<title>/plan.json (생성의 단일 진실원)
             │                                       · 상위 블로그 제목패턴/구성 분석
@@ -146,8 +146,9 @@
 | `/api/analyze` | POST | 사진 분석(백그라운드) |
 | `/api/photos` `/rename` `/update` | GET/POST | 분석결과 조회·장소명 수정 |
 | `/api/groups` | GET | 동선 그룹 조회 |
-| `/api/plan` | POST | 계획 초안 생성(TripPlanner) |
-| `/api/plan/confirm` | POST | 계획 확정 → plans/<title>/plan.json 저장 |
+| `/api/plan/draft` | POST | 계획 초안 생성(TripPlanner) |
+| `/api/plan` | GET/POST | 계획 조회 / 저장·확정 → plans/<title>/plan.json |
+| `/api/plan/stop/move`·`/exclude`·`/receipt` | POST | 사진 이동·제외 / 영수증 OCR |
 | `/api/seo` | POST | 상위블로그 SEO 분석 (plan.region 우선 사용) |
 | `/api/style` | POST | 참고URL 문체 분석 |
 | `/api/generate` `/generate_all` | POST | 원고 생성(단건/일괄, 백그라운드) |

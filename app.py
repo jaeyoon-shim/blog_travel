@@ -303,7 +303,7 @@ def api_status():
         "step": state["current_step"],
         "completed": list(state["completed"]),
         "photo_count": len(state["photo_results"]),
-        "group_count": len(state["selected_groups"]),
+        "group_count": len(_active_groups()),
         "progress": state["progress"],
     })
 
