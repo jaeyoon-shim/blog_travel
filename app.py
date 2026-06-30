@@ -69,6 +69,7 @@ state = {
     "progress": {"status": "idle", "message": "", "percent": 0},
     "settings": dict(DEFAULT_SETTINGS),
     "plan": None,
+    "receipts": [],
 }
 
 
@@ -463,6 +464,8 @@ def api_plan_draft():
     from core import TripPlanner
     free_mode = _is_free_mode()
     state["plan"] = TripPlanner.build_draft(state["photo_results"], free_mode=free_mode)
+    if state["receipts"]:
+        TripPlanner.match_receipts_to_stops(state["plan"], state["receipts"])
     _save_plan()
     return jsonify(state["plan"])
 
@@ -522,6 +525,35 @@ def api_plan_exclude():
         plan.setdefault("excluded_photo_ids", []).append(pid)
     _save_plan()
     return jsonify({"ok": True})
+
+@app.route('/api/receipts/upload', methods=['POST'])
+def api_receipts_upload():
+    from core import ReceiptReader, Config
+    from werkzeug.utils import secure_filename
+    files = request.files.getlist("receipts")
+    if not files:
+        return jsonify({"error": "영수증 파일 필요"}), 400
+    cfg = state.get("cfg") or Config()   # 분석 전(cfg=None)에도 OCR 동작
+    reader = ReceiptReader(cfg)
+    rdir = os.path.join("uploads", "receipts"); os.makedirs(rdir, exist_ok=True)
+    out = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        fname = secure_filename(f.filename) or "receipt.jpg"
+        path = os.path.join(rdir, fname)
+        f.save(path)
+        info = reader.read(path)
+        info["image_path"] = path
+        state["receipts"].append(info)
+        out.append(info)
+    # plan이 이미 있으면 즉시 재매칭
+    if state.get("plan") and state["plan"].get("days"):
+        from core import TripPlanner
+        TripPlanner.match_receipts_to_stops(state["plan"], state["receipts"])
+        _save_plan()
+    return jsonify({"count": len(out), "receipts": out,
+                    "total": len(state["receipts"])})
 
 @app.route('/api/plan/receipt', methods=['POST'])
 def api_plan_receipt():
