@@ -428,7 +428,9 @@ async function loadPlan(){
 
 function renderPlan(p){const root=document.getElementById('planRoot');if(!root)return;
   if(!p.days||!p.days.length){root.innerHTML='<div class="text-xs text-fg3">계획이 비어 있습니다.</div>';return}
-  root.innerHTML=p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>stopCard(s)).join('')}</div>`).join('')
+  const un=p.unmatched_receipts||[];
+  const unHtml=un.length?`<div class="card" style="border-color:var(--warn)"><div class="card-label">🧾 미배정 영수증 ${un.length}</div><div class="text-xs text-fg3 mb-6">어느 장소 것인지 지정하세요</div>${un.map((r,i)=>`<div style="font-size:11px;display:flex;align-items:center;gap:6px;margin:3px 0"><span style="color:#9c9;flex:1;min-width:0">🧾 ${esc(r.store_name||'(가게명?)')} ${r.amount!=null?esc((r.currency||'')+r.amount):''}${r.date?' · '+esc(r.date):''}</span><select onchange="assignReceipt(${i},this.value)" style="font-size:10px;padding:1px 3px"><option value="">장소 선택…</option>${stopOptions(null)}</select></div>`).join('')}</div>`:'';
+  root.innerHTML=unHtml+p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>stopCard(s)).join('')}</div>`).join('')
     +((p.undated_photo_ids&&p.undated_photo_ids.length)?`<div class="text-xs text-fg3 mt-6">📅 날짜 미상 사진 ${p.undated_photo_ids.length}장</div>`:'')}
 
 function stopCard(s){const rc=s.receipt||null;
@@ -438,12 +440,13 @@ function stopCard(s){const rc=s.receipt||null;
   <textarea class="f-feeling" placeholder="느낀점/분위기" style="width:100%;font-size:11px;min-height:28px">${esc(s.feeling)}</textarea>
   <input class="f-ai" value="${esc(s.ai_instruction)}" placeholder="AI 작성 지시(선택)" style="width:100%;font-size:11px;margin-bottom:4px">
   <div class="flex items-center gap-6" style="margin-bottom:4px"><span class="text-xs text-fg2">⭐ 별점</span><input class="f-rating" type="number" min="0" max="5" step="0.5" value="${s.rating==null?'':s.rating}" style="width:70px"><span class="text-xs text-fg3">사진 ${(s.photo_ids||[]).length}장</span></div>
-  <div style="margin-top:4px"><label class="btn btn-ghost btn-sm" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:4px">🧾 영수증 첨부<input type="file" accept="image/*" style="display:none" onchange="if(this.files[0])uploadReceipt('${esc(s.stop_id)}',this.files[0])"></label> <span style="color:#9c9;font-size:11px;margin-left:6px">${rc?'🧾 '+esc(receiptText(rc)):''}</span></div>
+  ${s.receipt?`<div style="margin-top:4px;font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="color:#9c9">🧾 ${esc(s.receipt.store_name||'(가게명?)')} ${s.receipt.amount!=null?esc((s.receipt.currency||'')+s.receipt.amount):''}</span><select onchange="reassignReceipt('${esc(s.stop_id)}',this.value)" style="font-size:10px;padding:1px 3px">${stopOptions(s.stop_id)}<option value="__none__">— 미배정 —</option></select></div>`:''}
   </div>`}
 
 function receiptText(r){if(!r)return '';const a=(r.amount!=null)?` ${r.currency||''}${r.amount}`:'';return `${r.store_name||''}${a}`.trim()}
 
 function findStop(p,sid){if(!p||!p.days)return null;for(const d of p.days)for(const s of (d.stops||[]))if(s.stop_id===sid)return s;return null}
+function stopOptions(selId){let h='';(planData&&planData.days||[]).forEach(d=>{(d.stops||[]).forEach(s=>{h+=`<option value="${esc(s.stop_id)}" ${s.stop_id===selId?'selected':''}>D${esc(''+d.day_no)} ${esc(s.name||'(이름없음)')}</option>`;});});return h;}
 
 function collectPlan(){if(!planData)return;
   if(typeof tripTitle==='string')planData.trip_title=tripTitle;
@@ -457,13 +460,9 @@ function collectPlan(){if(!planData)return;
 async function savePlan(){collectPlan();await fetch(`${API}/api/plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(planData)})}
 
 async function reloadPlan(){const r=await fetch(`${API}/api/plan`);planData=await r.json();renderPlan(planData)}
+function assignReceipt(idx,stopId){if(!planData||!stopId)return;const un=planData.unmatched_receipts||[];const rc=un[idx];if(!rc)return;const to=findStop(planData,stopId);if(!to)return;if(to.receipt)un.push(to.receipt);to.receipt=rc;un.splice(idx,1);savePlan().then(reloadPlan);}
+function reassignReceipt(fromId,toId){if(!planData||toId===fromId)return;const from=findStop(planData,fromId);if(!from||!from.receipt)return;const rc=from.receipt;from.receipt=null;planData.unmatched_receipts=planData.unmatched_receipts||[];if(toId==='__none__'){planData.unmatched_receipts.push(rc);}else{const to=findStop(planData,toId);if(to){if(to.receipt)planData.unmatched_receipts.push(to.receipt);to.receipt=rc;}}savePlan().then(reloadPlan);}
 
-async function uploadReceipt(sid,file){await savePlan();const fd=new FormData();fd.append('stop_id',sid);fd.append('receipt',file);
-  stat('영수증 인식 중...',true);
-  try{const r=await fetch(`${API}/api/plan/receipt`,{method:'POST',body:fd});const j=await r.json();
-    stat('✅ 영수증 처리');if(j&&j.suggest_name)alert('영수증 가게명이 장소명과 비슷합니다 — 반영 검토: '+((j.receipt&&j.receipt.store_name)||''));
-  }catch(e){stat('❌ 영수증 실패')}
-  await reloadPlan()}
 
 async function nextFromPlan(){await savePlan();try{await loadGrps()}catch(e){}go(3)}
 
