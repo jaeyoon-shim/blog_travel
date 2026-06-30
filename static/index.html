@@ -413,7 +413,7 @@ function stopCard(s){const rc=s.receipt||null;
   <textarea class="f-feeling" placeholder="느낀점/분위기" style="width:100%;font-size:11px;min-height:28px">${esc(s.feeling)}</textarea>
   <input class="f-ai" value="${esc(s.ai_instruction)}" placeholder="AI 작성 지시(선택)" style="width:100%;font-size:11px;margin-bottom:4px">
   <div class="flex items-center gap-6" style="margin-bottom:4px"><span class="text-xs text-fg2">⭐ 별점</span><input class="f-rating" type="number" min="0" max="5" step="0.5" value="${s.rating==null?'':s.rating}" style="width:70px"><span class="text-xs text-fg3">사진 ${(s.photo_ids||[]).length}장</span></div>
-  <div style="font-size:11px">🧾 <input type="file" accept="image/*" onchange="if(this.files[0])uploadReceipt('${esc(s.stop_id)}',this.files[0])"> <span style="color:#9c9">${rc?esc(receiptText(rc)):''}</span></div>
+  <div style="margin-top:4px"><label class="btn btn-ghost btn-sm" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:4px">🧾 영수증 첨부<input type="file" accept="image/*" style="display:none" onchange="if(this.files[0])uploadReceipt('${esc(s.stop_id)}',this.files[0])"></label> <span style="color:#9c9;font-size:11px;margin-left:6px">${rc?'🧾 '+esc(receiptText(rc)):''}</span></div>
   </div>`}
 
 function receiptText(r){if(!r)return '';const a=(r.amount!=null)?` ${r.currency||''}${r.amount}`:'';return `${r.store_name||''}${a}`.trim()}
