@@ -472,6 +472,70 @@ def api_plan_post():
     return jsonify({"ok": True})
 
 
+def _find_stop(plan, stop_id):
+    for d in plan.get("days", []):
+        for s in d.get("stops", []):
+            if s["stop_id"] == stop_id:
+                return d, s
+    return None, None
+
+def _remove_pid_everywhere(plan, pid):
+    for d in plan.get("days", []):
+        for s in d.get("stops", []):
+            if pid in s["photo_ids"]:
+                s["photo_ids"].remove(pid)
+    for k in ("undated_photo_ids", "excluded_photo_ids"):
+        if pid in plan.get(k, []):
+            plan[k].remove(pid)
+
+@app.route('/api/plan/stop/move', methods=['POST'])
+def api_plan_move():
+    data = request.json or {}
+    plan = state.get("plan") or {}
+    pid, to_stop = data.get("photo_id"), data.get("to_stop_id")
+    _, s = _find_stop(plan, to_stop)
+    if not s:
+        return jsonify({"error": "대상 장소 없음"}), 400
+    _remove_pid_everywhere(plan, pid)
+    s["photo_ids"].append(pid)
+    _save_plan()
+    return jsonify({"ok": True})
+
+@app.route('/api/plan/exclude', methods=['POST'])
+def api_plan_exclude():
+    data = request.json or {}
+    plan = state.get("plan") or {}
+    pid = data.get("photo_id")
+    _remove_pid_everywhere(plan, pid)
+    if data.get("restore"):
+        plan.setdefault("undated_photo_ids", []).append(pid)
+    else:
+        plan.setdefault("excluded_photo_ids", []).append(pid)
+    _save_plan()
+    return jsonify({"ok": True})
+
+@app.route('/api/plan/receipt', methods=['POST'])
+def api_plan_receipt():
+    from core import ReceiptReader
+    stop_id = request.form.get("stop_id")
+    f = request.files.get("receipt")
+    if not f or not stop_id:
+        return jsonify({"error": "stop_id/파일 필요"}), 400
+    rdir = os.path.join("uploads", "receipts"); os.makedirs(rdir, exist_ok=True)
+    path = os.path.join(rdir, f"{stop_id}_{f.filename}")
+    f.save(path)
+    info = ReceiptReader(state["cfg"]).read(path)
+    info["image_path"] = path
+    plan = state.get("plan") or {}
+    _, s = _find_stop(plan, stop_id)
+    suggest = False
+    if s:
+        s["receipt"] = info
+        suggest = ReceiptReader.crosscheck_name(info.get("store_name", ""), s.get("name", ""))
+        _save_plan()
+    return jsonify({"receipt": info, "suggest_name": suggest})
+
+
 # ── SEO ──
 @app.route('/api/seo', methods=['POST'])
 def api_seo():
