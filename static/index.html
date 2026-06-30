@@ -354,13 +354,19 @@ async function saveProfile(){
 
 // ═══ STEP 1: 업로드 ═══
 function renderS1(){$et.textContent='📸 사진 업로드';$badge.textContent='STEP 1';
-$eb.innerHTML=`<div class="dropzone" id="dz"><div style="font-size:32px;margin-bottom:8px">📁</div><div class="text-sm text-fg2">클릭하여 사진 선택 또는 드래그 & 드롭</div></div><input type="file" id="fi" multiple accept="image/*" style="display:none"><div id="upPhotos" class="mt-8"></div><button class="btn btn-pri w-full mt-8 hidden" id="anaBtn" onclick="doAnalyze()">🔍 사진 분석 시작</button>`;
+$eb.innerHTML=`<div class="dropzone" id="dz"><div style="font-size:32px;margin-bottom:8px">📁</div><div class="text-sm text-fg2">클릭하여 사진 선택 또는 드래그 & 드롭</div></div><input type="file" id="fi" multiple accept="image/*" style="display:none"><div id="upPhotos" class="mt-8"></div><div class="card-label mt-12">🧾 영수증 (선택)</div><div class="text-xs text-fg3 mb-6">가격·별점 근거. 올리면 가게명·금액을 자동 인식해 2단계에서 장소에 매칭됩니다.</div><div class="dropzone" id="rdz" style="padding:16px"><div style="font-size:24px;margin-bottom:6px">🧾</div><div class="text-sm text-fg2">영수증 이미지 클릭/드롭</div></div><input type="file" id="rfi" multiple accept="image/*" style="display:none"><div id="rcList" class="mt-8"></div><button class="btn btn-pri w-full mt-8 hidden" id="anaBtn" onclick="doAnalyze()">🔍 사진 분석 시작</button>`;
 const fi=document.getElementById('fi'),dz=document.getElementById('dz');
 dz.addEventListener('click',e=>{e.stopPropagation();fi.click()});
 fi.addEventListener('change',e=>{if(e.target.files.length)uploadFiles(e.target.files)});
 dz.addEventListener('dragover',e=>{e.preventDefault();e.stopPropagation();dz.style.borderColor='var(--pri)'});
 dz.addEventListener('dragleave',e=>{e.preventDefault();dz.style.borderColor=''});
-dz.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();dz.style.borderColor='';if(e.dataTransfer.files.length)uploadFiles(e.dataTransfer.files)})}
+dz.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();dz.style.borderColor='';if(e.dataTransfer.files.length)uploadFiles(e.dataTransfer.files)});
+const rfi=document.getElementById('rfi'),rdz=document.getElementById('rdz');
+rdz.addEventListener('click',e=>{e.stopPropagation();rfi.click()});
+rfi.addEventListener('change',e=>{if(e.target.files.length)uploadReceipts(e.target.files)});
+rdz.addEventListener('dragover',e=>{e.preventDefault();e.stopPropagation();rdz.style.borderColor='var(--pri)'});
+rdz.addEventListener('dragleave',e=>{e.preventDefault();rdz.style.borderColor=''});
+rdz.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();rdz.style.borderColor='';if(e.dataTransfer.files.length)uploadReceipts(e.dataTransfer.files)})}
 
 async function uploadFiles(files){
   const imgs=Array.from(files).filter(f=>f.type.startsWith('image/')||/\.(jpg|jpeg|png|gif|webp|heic)$/i.test(f.name));
@@ -375,6 +381,25 @@ async function uploadFiles(files){
     stat(`✅ ${d.uploaded}장 업로드`);c.querySelector('.text-xs').textContent=`${d.uploaded}장 업로드 완료`;
     document.getElementById('anaBtn').classList.remove('hidden');
   }catch(e){stat('❌ 업로드 실패');c.innerHTML=`<div class="card" style="border-color:var(--err)"><div style="color:var(--err);font-size:12px">❌ ${esc(e.message)}<br><span class="text-xs text-fg3">python app.py 실행 확인</span></div></div>`}}
+
+async function uploadReceipts(files){
+  const imgs=Array.from(files).filter(f=>f.type.startsWith('image/'));
+  if(!imgs.length){alert('이미지 파일을 선택해주세요');return}
+  stat(`영수증 ${imgs.length}장 인식 중...`,true);
+  const fd=new FormData();imgs.forEach(f=>fd.append('receipts',f));
+  try{
+    const r=await fetch(`${API}/api/receipts/upload`,{method:'POST',body:fd});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    stat(`영수증 ${d.total}장 인식`);
+    renderReceiptList(d.receipts||[], d.total||0);
+  }catch(e){stat('영수증 실패: '+e.message)}
+}
+function renderReceiptList(items,total){
+  const c=document.getElementById('rcList');if(!c)return;
+  c.innerHTML=`<div class="text-xs text-fg3 mb-6">인식된 영수증 ${total}장</div>`+
+    items.map(r=>`<div class="text-xs" style="padding:3px 0;border-top:1px solid var(--bd)">🧾 ${esc(r.store_name||'(가게명 미인식 — 2단계에서 입력)')} ${r.amount!=null?esc((r.currency||'')+r.amount):''}${r.date?' · '+esc(r.date):''}</div>`).join('');
+}
 
 async function doAnalyze(){show('사진 분석 중...');await fetch(`${API}/api/analyze`,{method:'POST'});
   startPoll(async p=>{if(p.status==='done'){const r=await fetch(`${API}/api/photos`);photos=await r.json();go(2)}})}
