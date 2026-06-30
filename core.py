@@ -1606,6 +1606,34 @@ class TripPlanner:
             })
         return stops
 
+    @staticmethod
+    def match_receipts_to_stops(plan, receipts):
+        """영수증을 가게명<->장소명 일치(+같은 날짜 우대)로 stop에 배정.
+        이름 일치 없으면 미배정(추측 안 함). plan을 직접 갱신하고
+        미배정은 plan['unmatched_receipts']에 둔다. 반환: (plan, unmatched)."""
+        # 멱등성: 기존 배정 초기화 후 다시 매칭
+        for d in plan.get("days", []):
+            for s in d.get("stops", []):
+                s["receipt"] = None
+        unmatched = []
+        for r in (receipts or []):
+            store = (r or {}).get("store_name", "")
+            rdate = (r or {}).get("date", "")
+            best, best_score = None, 0
+            for d in plan.get("days", []):
+                date_match = bool(rdate) and d.get("date") == rdate
+                for s in d.get("stops", []):
+                    if ReceiptReader.crosscheck_name(store, s.get("name", "")):
+                        score = 2 if date_match else 1
+                        if score > best_score:
+                            best_score, best = score, s
+            if best is not None:
+                best["receipt"] = r
+            else:
+                unmatched.append(r)
+        plan["unmatched_receipts"] = unmatched
+        return plan, unmatched
+
 
 class ReceiptReader:
     """영수증 이미지 → {store_name, amount, currency, date}. (이 태스크는 파싱만)"""

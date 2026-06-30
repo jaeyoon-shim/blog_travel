@@ -314,3 +314,25 @@ def test_insert_meta_lines():
     # 메타 없으면 그대로
     g._current_place_meta = {}
     assert g._insert_meta_lines("<h2>x</h2>") == "<h2>x</h2>"
+
+
+# ── 영수증↔장소 자동 매칭 ──
+def test_match_receipts_to_stops():
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "스타벅스 삿포로", True),
+        _pr("u/c.jpg", "2026:06:23 09:00:00", "오타루 운하", True),
+    ]
+    plan = TripPlanner.build_draft(photos)
+    receipts = [
+        {"store_name": "스타벅스", "amount": 600, "currency": "JPY", "date": "2026-06-22", "image_path": "x"},
+        {"store_name": "알수없는가게", "amount": 1000, "currency": "JPY", "date": "2026-06-22", "image_path": "y"},
+    ]
+    plan2, un = TripPlanner.match_receipts_to_stops(plan, receipts)
+    sb = [s for d in plan2["days"] for s in d["stops"] if s["name"] == "스타벅스 삿포로"][0]
+    assert sb["receipt"] and sb["receipt"]["amount"] == 600   # 이름 일치 -> 배정
+    assert len(un) == 1 and un[0]["store_name"] == "알수없는가게"  # 미배정
+    assert plan2["unmatched_receipts"] == un
+    # 재실행 멱등성: 같은 입력 재매칭해도 동일
+    plan3, un2 = TripPlanner.match_receipts_to_stops(plan2, receipts)
+    sb3 = [s for d in plan3["days"] for s in d["stops"] if s["name"] == "스타벅스 삿포로"][0]
+    assert sb3["receipt"]["amount"] == 600 and len(un2) == 1
