@@ -1463,6 +1463,36 @@ class TripStructurer:
         return 2 * R * math.asin(math.sqrt(a))
 
 
+class TripPlanner:
+    """사진 분석 결과 → 검수용 계획 초안(TripPlan dict). 네트워크 미사용."""
+
+    @staticmethod
+    def _photo_id(file_path):
+        import hashlib, os
+        base = os.path.basename(file_path or "")
+        return "p" + hashlib.md5(base.encode("utf-8")).hexdigest()[:8]
+
+    @staticmethod
+    def _assign_day(exif_date, cutoff_hour=4):
+        """'2026:06:22 14:30:00' -> 'YYYY-MM-DD'. 시각<cutoff면 전날. 실패시 None."""
+        import re
+        from datetime import datetime, timedelta
+        if not exif_date:
+            return None
+        m = re.search(r'(\d{4})[:\-/](\d{2})[:\-/](\d{2})[ T]?(\d{2})?:?(\d{2})?', exif_date)
+        if not m:
+            return None
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        hh = int(m.group(4)) if m.group(4) else 12
+        try:
+            dt = datetime(y, mo, d, hh)
+        except ValueError:
+            return None
+        if hh < cutoff_hour:
+            dt = dt - timedelta(days=1)
+        return dt.strftime("%Y-%m-%d")
+
+
 # ============================================================
 # 여행 블로그 글 생성기 v2
 # ============================================================

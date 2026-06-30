@@ -3,7 +3,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator
+from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator, TripPlanner
 from posters import NaverSeleniumPoster
 
 
@@ -181,3 +181,22 @@ def test_visibility_target_safe_default():
     assert f("") == "비공개"
     assert f("garbage") == "비공개"
     assert f(None) == "비공개"
+
+
+# ── 계획 검수: photo_id 안정성 ──
+def test_photo_id_stable():
+    a = TripPlanner._photo_id("uploads/IMG_0003.jpg")
+    b = TripPlanner._photo_id("uploads/IMG_0003.jpg")
+    c = TripPlanner._photo_id("uploads/IMG_0004.jpg")
+    assert a == b              # 같은 파일 → 같은 ID (재분석 안정)
+    assert a != c
+    assert a.startswith("p")
+
+
+# ── 계획 검수: Day 배정 + 새벽 4시 컷오프 ──
+def test_assign_day_cutoff():
+    assert TripPlanner._assign_day("2026:06:22 14:30:00") == "2026-06-22"
+    assert TripPlanner._assign_day("2026:06:23 01:00:00") == "2026-06-22"
+    assert TripPlanner._assign_day("2026:06:23 04:00:00") == "2026-06-23"
+    assert TripPlanner._assign_day("") is None
+    assert TripPlanner._assign_day("날짜아님") is None
