@@ -200,3 +200,34 @@ def test_assign_day_cutoff():
     assert TripPlanner._assign_day("2026:06:23 04:00:00") == "2026-06-23"
     assert TripPlanner._assign_day("") is None
     assert TripPlanner._assign_day("날짜아님") is None
+
+
+# ── 계획 검수: 초안 합성 ──
+def _pr(fp, exif, name, conf, lat=None, lon=None):
+    r = {"file_path": fp, "file_name": fp.split("/")[-1], "exif_date": exif,
+         "location_name": name, "name_confident": conf, "region": "홋카이도",
+         "vision": {"scene_type": "관광지"}}
+    if lat is not None:
+        r["gps"] = {"lat": lat, "lon": lon}
+    return r
+
+def test_build_draft_days_and_unconfident_name_blanked():
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True, 43.19, 140.99),
+        _pr("u/b.jpg", "2026:06:22 11:00:00", "동네 카페", False, 43.19, 140.99),
+        _pr("u/c.jpg", "2026:06:23 09:00:00", "삿포로 TV타워", True, 43.06, 141.35),
+        _pr("u/d.jpg", "", "", False),   # 날짜 미상
+    ]
+    plan = TripPlanner.build_draft(photos, free_mode=True)
+    assert plan["free_mode"] is True
+    assert plan["region"] == "홋카이도"
+    day_dates = [d["date"] for d in plan["days"]]
+    assert "2026-06-22" in day_dates and "2026-06-23" in day_dates
+    assert len(plan["undated_photo_ids"]) == 1
+    for day in plan["days"]:
+        for s in day["stops"]:
+            assert s["stop_id"] and isinstance(s["photo_ids"], list)
+    names = {s["name"]: s["name_source"]
+             for d in plan["days"] for s in d["stops"]}
+    assert "오타루 운하" in names and names["오타루 운하"] == "auto"
+    assert "" in names and names[""] == "none"

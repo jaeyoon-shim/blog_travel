@@ -1492,6 +1492,69 @@ class TripPlanner:
             dt = dt - timedelta(days=1)
         return dt.strftime("%Y-%m-%d")
 
+    @staticmethod
+    def build_draft(photo_results, free_mode=False):
+        """photo_results -> TripPlan dict (검수 전 초안)."""
+        from collections import OrderedDict
+        region = ""
+        for r in photo_results:
+            if r.get("region"):
+                region = r["region"]; break
+
+        day_map = OrderedDict()
+        undated = []
+        for r in photo_results:
+            day = TripPlanner._assign_day(r.get("exif_date", ""))
+            pid = TripPlanner._photo_id(r.get("file_path", ""))
+            r["_pid"] = pid
+            if day is None:
+                undated.append(pid)
+            else:
+                day_map.setdefault(day, []).append(r)
+
+        days = []
+        for day_no, (date_key, photos) in enumerate(sorted(day_map.items()), 1):
+            stops = TripPlanner._stops_for_day(photos)
+            days.append({"day_no": day_no, "date": date_key, "stops": stops})
+
+        return {
+            "plan_version": 1,
+            "trip_title": "",
+            "region": region,
+            "region_source": "auto" if region else "none",
+            "free_mode": bool(free_mode),
+            "days": days,
+            "undated_photo_ids": undated,
+            "excluded_photo_ids": [],
+        }
+
+    @staticmethod
+    def _stops_for_day(photos):
+        """하루치 사진 -> 장소(stop) 목록. 같은 location_name끼리 묶음(빈 이름은 개별 stop)."""
+        groups = []       # [(name, [photos])]
+        index = {}        # name -> groups idx
+        for p in photos:
+            name = p.get("location_name", "") if p.get("name_confident") else ""
+            if name and name in index:
+                groups[index[name]][1].append(p)
+            else:
+                if name:
+                    index[name] = len(groups)
+                groups.append((name, [p]))
+        stops = []
+        for order, (name, ps) in enumerate(groups, 1):
+            stops.append({
+                "stop_id": "s" + ps[0]["_pid"][1:],
+                "order": order,
+                "name": name,
+                "name_source": "auto" if name else "none",
+                "events": [], "feeling": "", "ai_instruction": "",
+                "rating": None, "receipt": None,
+                "show_rating": True, "show_price": True,
+                "photo_ids": [p["_pid"] for p in ps],
+            })
+        return stops
+
 
 # ============================================================
 # 여행 블로그 글 생성기 v2
