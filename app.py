@@ -362,6 +362,7 @@ def api_analyze():
 # ── 사진 ──
 @app.route('/api/photos')
 def api_photos():
+    from core import TripPlanner
     results = []
     for r in state["photo_results"]:
         thumb = ""
@@ -379,6 +380,7 @@ def api_photos():
                 thumb = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
             except: pass
         results.append({
+            "pid": TripPlanner._photo_id(fp),
             "file_name": r.get("file_name",""), "location_name": r.get("location_name",""),
             "location_name_local": r.get("location_name_local",""),
             "scene_description": r.get("scene_description",""),
