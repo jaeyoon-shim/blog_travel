@@ -48,3 +48,8 @@
 2. **함정 — 그룹 소스 불일치**: plan 흐름에서 `/api/groups`, `/api/blocks`, `generate`가 모두 같은 그룹 소스(`_active_groups`)를 봐야 gi 인덱스가 맞는다. 한 곳이라도 원래 `state["groups"]`를 직접 참조하면 프론트 목록과 생성 그룹이 어긋난다.
 
 3. **영수증 이미지 발행 제외**: 영수증 사진은 개인정보이므로 발행 블록에서 제외. 파일명은 `werkzeug.utils.secure_filename`으로 정제. 별점·가격은 코드가 HTML 조립(`_format_meta_line`), URL은 포함하지 않는다.
+
+4. **🔴 서빙되는 UI 파일은 `static/index.html`이다 (루트 `index.html` 아님)**: `app.py`의 `/`는 `send_from_directory('static','index.html')`. 루트 `index.html`은 서빙 안 되는 레거시 중복본. UI 작업은 **반드시 `static/index.html`** 에 한다. (이번에 서브에이전트가 CLAUDE.md의 모호한 "index.html" 표기를 믿고 루트를 고쳐 전부 무효가 됐다 → static/로 포팅해 해결.) CLAUDE.md의 표기도 정정 필요.
+
+5. **🔴 단일 인라인 `<script>`의 구문오류 1개 = SPA 전체 사망**: `static/index.html`은 거대한 단일 인라인 스크립트라, 어디든 구문오류(예: `updateSettingsPreview`의 짝 없는 `}`)가 하나 있으면 **모든 함수·리스너가 미정의**되어 화면이 정적 스켈레톤만 남는다(콘솔에 조용히 죽기도). 발견 당시 이 오류는 **기존부터 존재**(이 작업과 무관)해 웹 UI가 통째로 안 돌고 있었다.
+   - **교훈**: UI 변경은 유닛/코드리뷰만으로 부족 — **실제 브라우저 렌더 확인 필수**(`/browse`로 스크린샷). 정적 검증으로 `node -e "new (require('vm').Script)(scriptSrc)"`(V8=브라우저 파서)로 인라인 스크립트 파싱을 검사할 수 있다. (`node --check`는 CJS 래퍼 때문에 오탐 위치를 주지만, vm.Script는 정확.)
