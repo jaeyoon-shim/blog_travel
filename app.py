@@ -68,6 +68,7 @@ state = {
     "current_step": 1, "completed": set(),
     "progress": {"status": "idle", "message": "", "percent": 0},
     "settings": dict(DEFAULT_SETTINGS),
+    "plan": None, "plan_dir": None,
 }
 
 
@@ -424,6 +425,46 @@ def api_groups():
         state["selected_groups"] = groups
         return jsonify([{"label":g.get("label",""),"photo_count":len(g.get("photos",[])),"course_line":g.get("course_line","")} for g in groups])
     return jsonify([])
+
+
+def _is_free_mode():
+    return not bool(state["settings"]["api"].get("google_key", ""))
+
+
+def _plan_path():
+    title = (state.get("plan") or {}).get("trip_title", "") or "untitled"
+    safe = "".join(c for c in title if c.isalnum() or c in " _-").strip() or "untitled"
+    d = os.path.join("plans", safe)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "plan.json")
+
+def _save_plan():
+    if not state.get("plan"):
+        return
+    with open(_plan_path(), "w", encoding="utf-8") as f:
+        json.dump(state["plan"], f, ensure_ascii=False, indent=2)
+
+@app.route('/api/plan/draft', methods=['POST'])
+def api_plan_draft():
+    data = request.json or {}
+    if state.get("plan") and not data.get("overwrite"):
+        return jsonify({"need_confirm": True,
+                        "message": "기존 계획이 있습니다. 덮어쓸까요?"}), 409
+    from core import TripPlanner
+    free_mode = _is_free_mode()
+    state["plan"] = TripPlanner.build_draft(state["photo_results"], free_mode=free_mode)
+    _save_plan()
+    return jsonify(state["plan"])
+
+@app.route('/api/plan', methods=['GET'])
+def api_plan_get():
+    return jsonify(state.get("plan") or {})
+
+@app.route('/api/plan', methods=['POST'])
+def api_plan_post():
+    state["plan"] = request.json or {}
+    _save_plan()
+    return jsonify({"ok": True})
 
 
 # ── SEO ──
