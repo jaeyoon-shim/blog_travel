@@ -553,11 +553,16 @@ def api_seo():
     data = request.json or {}
     keyword = data.get("keyword","")
     if not keyword:
-        locs = set()
-        for r in state["photo_results"]:
-            if r.get("city"): locs.add(r["city"])
-            if r.get("region"): locs.add(r["region"])
-        keyword = " ".join(list(locs)[:2]) + " 여행" if locs else "여행"
+        plan = state.get("plan") or {}
+        region = plan.get("region","")        # E 연결점: 확정 지역명을 네이버 검색 키워드로 우선
+        if region:
+            keyword = region + " 여행"
+        else:
+            locs = set()
+            for r in state["photo_results"]:
+                if r.get("city"): locs.add(r["city"])
+                if r.get("region"): locs.add(r["region"])
+            keyword = " ".join(list(locs)[:2]) + " 여행" if locs else "여행"
     try:
         nba = NaverBlogAnalyzer(state["cfg"])
         analysis = nba.analyze(keyword)

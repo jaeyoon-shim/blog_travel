@@ -192,7 +192,8 @@ STEP 1: 사진 선택 + 분석
   └─ EXIF GPS 추출 → Google Geocode → Vision AI 장면 설명
   └─ 일별/장소별/코스별 자동 그루핑
 
-STEP 2: 구조 미리보기 + 편집
+STEP 2: 계획 검수 (사전 검수 단계 — 일정/장소명/사건/느낌/별점/영수증 확정 → plans/<title>/plan.json 저장)
+  └─ TripPlanner 초안 → 사용자 확정 → plan.json (생성의 단일 진실원)
   └─ 장소별 메모란 (AI 초안에 반영)
   └─ 네이버 경쟁 블로그 SEO 분석
   └─ 참고 블로그 스타일 분석
