@@ -439,23 +439,35 @@ function renderPlan(p){const root=document.getElementById('planRoot');if(!root)r
 
 function stopThumbs(s){
   const ids=(s.photo_ids||[]); if(!ids.length)return '';
+  const st='width:112px;height:112px;object-fit:cover;border-radius:10px;border:1px solid var(--bd);cursor:zoom-in';
   return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">`+ids.map(pid=>{
     const p=(window._pidMap||{})[pid];
-    return (p&&p.thumbnail)
-      ?`<img src="${p.thumbnail}" title="${esc((p.file_name||'')+(p.scene_description?' · '+p.scene_description:''))}" style="width:80px;height:80px;object-fit:cover;border-radius:10px;border:1px solid var(--bd)">`
-      :`<div style="width:80px;height:80px;border-radius:10px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--fg3)">사진</div>`;
+    if(p&&p.thumbnail){
+      const oc=p.file_name?` onclick="window.open('/uploads/'+encodeURIComponent('${esc(p.file_name)}'),'_blank')"` :'';
+      return `<img src="${p.thumbnail}" title="${esc((p.file_name||'')+(p.scene_description?' · '+p.scene_description:''))}" style="${st}"${oc}>`;
+    }
+    return `<div style="width:112px;height:112px;border-radius:10px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg3)">사진</div>`;
   }).join('')+`</div>`;
 }
 function stopHints(s){
   const hs=(s.photo_ids||[]).map(pid=>((window._pidMap||{})[pid]||{}).scene_description).filter(Boolean);
   return hs.length?`<div style="font-size:12px;color:var(--fg2);margin:2px 0 10px;line-height:1.5">💬 ${esc(hs.join(' · '))}</div>`:'';
 }
+function stopGps(s){
+  for(const pid of (s.photo_ids||[])){ const p=(window._pidMap||{})[pid]; if(p&&p.gps&&p.gps.lat!=null&&p.gps.lon!=null) return p.gps; }
+  return null;
+}
+function stopMap(s){
+  const g=stopGps(s); if(!g)return '';
+  const d=0.004, bbox=`${g.lon-d},${g.lat-d},${g.lon+d},${g.lat+d}`;
+  return `<div style="margin:8px 0"><iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${g.lat},${g.lon}" style="width:100%;height:150px;border:1px solid var(--bd);border-radius:10px;background:var(--bg)" loading="lazy"></iframe><a href="https://www.google.com/maps?q=${g.lat},${g.lon}" target="_blank" rel="noopener" style="display:inline-block;margin-top:4px;font-size:11px;color:var(--pri)">📍 구글 지도에서 열기</a></div>`;
+}
 function stopCard(s){const rc=s.receipt||null;
   const lbl='font-size:11px;color:var(--fg3);margin:10px 0 3px;font-weight:500';
   const ta='width:100%;font-size:13px;padding:9px 11px;min-height:46px;line-height:1.6;box-sizing:border-box';
   return `<div class="stop" data-stop="${esc(s.stop_id)}" style="background:var(--sf3);border:1px solid var(--bd);border-radius:14px;padding:16px;margin:12px 0">
   <input class="f-name" value="${esc(s.name)}" placeholder="📍 장소 이름 (사진 보고 입력)" style="font-weight:700;font-size:15px;width:100%;padding:9px 11px;box-sizing:border-box">
-  ${stopThumbs(s)}${stopHints(s)}
+  ${stopThumbs(s)}${stopHints(s)}${stopMap(s)}
   <div style="${lbl}">📝 무슨 일이 있었나</div>
   <textarea class="f-events" placeholder="예: 운하 산책, 유리공예 거리 구경…" style="${ta}">${esc((s.events||[]).join('\n'))}</textarea>
   <div style="${lbl}">💭 느낀 점 · 분위기</div>
