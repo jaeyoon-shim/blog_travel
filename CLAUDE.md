@@ -37,7 +37,7 @@ Flask 백엔드 + 단일 페이지 UI 구조. 무거운 작업은 백그라운�
 - **`app.py`** — Flask REST API. 전역 `state` dict로 세션 상태 관리. 분석/생성/발행은 `threading.Thread`(daemon)로 돌리고 프론트가 `/api/status`를 폴링.
 - **`core.py`** — AI 엔진(가장 큰 파일, ~2,500줄). 주요 클래스: `Config`, `PhotoAnalyzer`(EXIF·역지오코딩·Vision·POI 해석), `TripStructurer`(동선 그루핑), `TravelBlogGenerator`(프롬프트 빌드·원고 생성·위키박스/경로 삽입), `NaverBlogAnalyzer`/`StyleAnalyzer`(SEO·문체 분석), `LocalSaver`.
 - **`posters.py`** — 발행 엔진. `html_to_blocks()`(AI HTML → 네이버 에디터 블록 배열)와 `NaverSeleniumPoster`(클립보드 기반 캡차 우회 발행). `NaverPoster`/`TistoryPoster`는 파사드.
-- **`index.html`** — 5단계 SPA UI.
+- **`static/index.html`** — 5단계 SPA UI. **이 파일이 실제 서빙되는 UI**다(`app.py`의 `/`가 `send_from_directory('static','index.html')`). UI 작업은 반드시 여기서 한다. (거대 단일 인라인 `<script>`이므로 구문오류 하나로 SPA 전체가 죽는다 — 수정 후 `node vm.Script`로 파싱 검증 + `/browse`로 실제 렌더 확인.)
 - `blog_auto.py`는 **레거시 Tkinter 데스크톱 GUI 변형**(웹 에디션으로 대체됨). `route_map_capture.py`는 경로 지도 캡처 유틸.
 
 자세한 모듈/라우트/데이터 모델 명세는 `SPEC.md`(최신, 권위 있는 문서), 버전 히스토리·버그 이력은 `README.md` 참고.
