@@ -202,12 +202,15 @@ async function renderProfileSelect(){
 
 async function selectProfile(name){
   stat('프로필 로드 중...',true);
-  const r=await fetch(`${API}/api/profiles/${encodeURIComponent(name)}`);
-  const d=await r.json();
-  if(d.error){alert(d.error);return}
-  settings=d;profileName=name;refUrls=d.ref_urls||[];
-  stat(`✅ ${name} 프로필 로드`);
-  go(1);
+  try{
+    const r=await fetch(`${API}/api/profiles/${encodeURIComponent(name)}`);
+    if(!r.ok){stat('로드 실패');alert(`프로필 로드 실패 (${r.status}).\n앱을 재시작했는지 확인하세요:\npython app.py`);return}
+    const d=await r.json();
+    if(d.error){stat('로드 실패');alert(d.error);return}
+    settings=d;profileName=name;refUrls=d.ref_urls||[];
+    stat(`✅ "${name}" 프로필 로드됨`);
+    go(0);   // 설정 화면으로 → 불러온 저장사항을 바로 확인
+  }catch(e){stat('로드 실패');alert('프로필 로드 오류: '+e.message+'\n앱 재시작(python app.py)이 필요할 수 있습니다.');}
 }
 
 function newProfile(){
@@ -234,7 +237,7 @@ async function loadSettings(){
 }
 loadSettings();
 
-function goSettings(){go(-1)}
+function goSettings(){go(0)}
 
 // ═══ STEP 0: 설정 ═══
 function renderSettings(){
