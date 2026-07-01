@@ -413,7 +413,8 @@ $eb.innerHTML=`
 <div class="card"><div class="card-label">참고 블로그 URL (문체 분석)</div><div id="refList"></div><div class="flex gap-6 mt-6"><input type="text" id="refIn" placeholder="https://blog.naver.com/..." style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addRef()}"><button class="btn btn-ghost btn-sm" onclick="addRef()">+ 추가</button></div><button class="btn btn-ghost btn-sm mt-6" onclick="doStyle()">🔍 스타일 분석 ${refUrls.length?'('+refUrls.length+'개)':''}</button></div>
 </details>
 <div id="planRoot"><div class="text-xs text-fg3">불러오는 중...</div></div>
-<button class="btn btn-pri w-full mt-12" onclick="nextFromPlan()">다음: AI 생성 →</button>
+<button class="btn btn-ghost w-full mt-12" onclick="manualSave()">💾 저장</button>
+<button class="btn btn-pri w-full mt-6" onclick="nextFromPlan()">다음: AI 생성 →</button>
 <span id="planSaveInd" style="font-size:11px;color:var(--fg3);margin-left:10px"></span>`;
 const _pr=document.getElementById('planRoot');
 if(_pr && !_pr._autosaveBound){ _pr._autosaveBound=true; _pr.addEventListener('input', scheduleAutoSave); }
@@ -496,6 +497,7 @@ function collectPlan(){if(!planData)return;
     const rv=el.querySelector('.f-rating').value;s.rating=rv===''?null:parseFloat(rv)})}
 
 async function savePlan(){collectPlan();await fetch(`${API}/api/plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(planData)})}
+async function manualSave(){ setSaveStatus('저장 중…'); try{ await savePlan(); setSaveStatus('✓ 저장됨'); }catch(e){ setSaveStatus('저장 실패'); } }
 
 let _saveTimer=null;
 function setSaveStatus(t){ const e=document.getElementById('planSaveInd'); if(e)e.textContent=t; }
