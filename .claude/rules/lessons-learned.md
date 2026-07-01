@@ -56,4 +56,6 @@
 
 6. **영수증 UX = 업로드 단계에서 사진과 함께 + 자동 매칭**: 영수증은 1단계에서 별도 영역(`#rdz`→`/api/receipts/upload`)으로 올려 즉시 OCR, `state["receipts"]`에 보관. 계획 초안 시 `TripPlanner.match_receipts_to_stops`로 **가게명↔장소명 일치(+같은 날짜)** 인 stop에 자동 배정(추측 안 함, 실패분은 `plan["unmatched_receipts"]`). 2단계 장소 카드에서 매칭 표시+재배정, 상단 "미배정 영수증"칸에서 드롭다운으로 배정. 카드별 개별 첨부는 폐기.
 
-7. **`/browse` 테스트 함정 2개**: (a) `browse js`는 **격리 월드**라 페이지 전역(go/render 등) 접근 불가 → DOM은 읽히지만 함수 호출은 안 됨. 네비게이션은 실제 `browse click`으로. (b) Chrome은 **특정 포트(5060/5061=SIP 등)를 ERR_UNSAFE_PORT로 차단** → 로컬 테스트 서버는 8088 등 안전 포트 사용. (c) flex 행에서 `<select>`(긴 옵션)는 최소너비가 커져 옆 `<span>`을 0폭으로 만들어 글자 세로깨짐 → 세로 스택 또는 select `max-width`.
+7. **`/browse` 테스트 함정 3개**: (a) `browse js`는 **격리 월드**라 페이지 전역(go/render 등) 접근 불가 → DOM은 읽히지만 함수 호출은 안 됨. 네비게이션은 실제 `browse click`으로. (b) Chrome은 **특정 포트(5060/5061=SIP 등)를 ERR_UNSAFE_PORT로 차단** → 로컬 테스트 서버는 8088 등 안전 포트 사용. (c) flex 행에서 `<select>`(긴 옵션)는 최소너비가 커져 옆 `<span>`을 0폭으로 만들어 글자 세로깨짐 → 세로 스택 또는 select `max-width`. (d) 시드 서버를 여러 포트에 남기면 SO_REUSEADDR로 **옛 서버가 응답**해 혼란 → 재검증 전 `taskkill //F //IM python.exe`로 정리.
+
+8. **검수 화면 편의기능 배치(2026-07-01)**: 썸네일은 `/api/photos`에 `pid` 추가해 stop.photo_ids와 매칭(썸네일·힌트·지도). 같은 위치 무명 사진은 `_stops_for_day`에서 **GPS 반올림(~110m) 클러스터**로 묶음. **지도는 검수 UI에만**(OSM iframe + 구글맵 링크, 키 불필요) — **발행 HTML엔 절대 미포함**(불변식). 편집 자동저장은 `#planRoot`에 delegated `input` 리스너 + 디바운스 savePlan. 테마는 `:root` 변수라 팔레트만 바꾸면 전역 반영(상아색+연두). 전체발행은 `/api/publish_all`(그룹별 blocks 수집) — 되돌리기 어려우니 `confirm()` 필수.
