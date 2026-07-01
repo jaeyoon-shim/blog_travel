@@ -558,10 +558,10 @@ $eb.innerHTML=`
 <div class="card"><div class="card-label">글 스타일</div><select id="structSel"><option>감성 후기형</option><option>정보 가이드형</option><option>감성+정보 혼합형</option></select></div>
 <div class="card"><div class="card-label">장소별 메모</div>${places.map(pl=>`<div class="mb-6"><div class="text-xs text-fg2 mb-6">📍 ${esc(pl)}</div><input type="text" class="memo-in" data-place="${esc(pl)}" value="${esc(placeMemos[pl]||'')}" placeholder="메모..." onchange="placeMemos['${esc(pl)}']=this.value"></div>`).join('')}</div>
 <div class="flex gap-6">
-  <button class="btn btn-pri" style="flex:1" onclick="doGen()">✨ 선택 그룹 생성</button>
-  <button class="btn btn-ok" style="flex:1" onclick="doGenAll()">🚀 전체 그룹 생성</button>
+  <button class="btn btn-pri" style="flex:1" onclick="doGen()">✨ 선택한 Day 생성</button>
+  <button class="btn btn-ok" style="flex:1" onclick="doGenAll()">🚀 전체 일정 생성</button>
 </div>
-<div class="text-xs text-fg3 mt-6">현재 선택: 그룹 ${curGroup+1} / 전체 ${groups.length}개</div>`}
+<div class="text-xs text-fg3 mt-6">현재 선택: Day ${curGroup+1} / 전체 ${groups.length}일</div>`}
 
 async function doGen(){show('AI 초안 생성 중...');
 const memos={...placeMemos};document.querySelectorAll('.memo-in').forEach(e=>{if(e.value)memos[e.dataset.place]=e.value});
@@ -624,6 +624,7 @@ $eb.innerHTML=`
 <div class="card"><div class="card-label">공개 설정</div><select id="pVis"><option ${api.default_visibility==='비공개'?'selected':''}>비공개</option><option ${api.default_visibility==='공개'?'selected':''}>공개</option></select></div>
 <div class="card"><div class="card-label">요약</div><div class="text-sm text-fg2">블록 ${blocks.length}개 · 이미지 ${blocks.filter(b=>b.type==='image').length}장</div></div>
 <button class="btn btn-pri w-full mt-12" onclick="doPub()">📤 발행</button>
+<button class="btn btn-ok w-full mt-6" onclick="doPubAll()">🚀 전체 일정 한번에 발행</button>
 <button class="btn btn-ghost w-full mt-6" onclick="doSave()">💾 로컬 저장</button>`}
 
 async function doPub(){const t=document.getElementById('pTitle')?.value||draftTitle;
@@ -632,6 +633,26 @@ const method=document.getElementById('pMethod')?.value||'selenium';
 const vis=document.getElementById('pVis')?.value||'비공개';
 show('발행 중...');await fetch(`${API}/api/publish`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t,blocks,tags,method,visibility:vis})});
 startPoll(p=>{if(p.status==='done')alert('✅ 발행 완료!');else if(p.status==='error')alert(p.message)})}
+
+async function doPubAll(){
+  const method=document.getElementById('pMethod')?.value||'selenium';
+  const vis=document.getElementById('pVis')?.value||'비공개';
+  const n=(groups&&groups.length)||0;
+  if(!n){alert('발행할 일정이 없습니다.');return}
+  if(!confirm(`전체 ${n}일 일정을 각각 별도 글로 발행합니다.\n공개설정: ${vis}\n계속할까요? (발행은 되돌리기 어렵습니다)`))return;
+  const gs=[];
+  for(let gi=0; gi<n; gi++){
+    try{
+      const r=await fetch(`${API}/api/blocks/${gi}/0`);
+      const d=await r.json();
+      if(d.blocks && d.blocks.length) gs.push({title:d.title||('Day '+(gi+1)), blocks:d.blocks, tags:d.tags||[]});
+    }catch(e){}
+  }
+  if(!gs.length){alert('생성된 초안이 없습니다. STEP 3에서 "전체 일정 생성"을 먼저 하세요.');return}
+  show(`전체 ${gs.length}일 발행 중...`);
+  await fetch(`${API}/api/publish_all`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groups:gs,visibility:vis,method})});
+  startPoll(p=>{ if(p.status==='done')alert('✅ 전체 발행 완료!'); else if(p.status==='error')alert(p.message); });
+}
 
 async function doSave(){const html=$pc.innerHTML;
 const r=await fetch(`${API}/api/save`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:draftTitle,content:html,tags:draftTags})});
