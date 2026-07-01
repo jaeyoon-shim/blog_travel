@@ -14,6 +14,10 @@ try:
 except ImportError: pass
 
 LOG_DIR=Path("logs"); LOG_DIR.mkdir(exist_ok=True)
+# Windows cp949 콘솔에서 이모지 로그/print가 UnicodeEncodeError로 앱을 죽이는 것 방지
+for _s in (sys.stdout, sys.stderr):
+    try: _s.reconfigure(encoding='utf-8', errors='replace')
+    except Exception: pass
 logging.basicConfig(level=logging.INFO,format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.FileHandler(LOG_DIR/'travelblog.log',encoding='utf-8'),logging.StreamHandler(sys.stdout)])
 logger=logging.getLogger(__name__)
