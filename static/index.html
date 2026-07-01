@@ -604,10 +604,11 @@ blocks=d.blocks||[];draftTitle=d.title||draftTitle;draftTags=d.tags||draftTags;s
 
 // ═══ STEP 4: 편집 ═══
 function renderS4(){$et.textContent='✏️ 편집';$badge.textContent=`${blocks.length}블록`;
+if(!blocks.length && groups.length && !renderS4._al){renderS4._al=1;loadDrafts(curGroup).finally(()=>{renderS4._al=0})}  // 생성 후 재진입시 초안 자동 로드
 // 그룹 탭
 let h=`<div class="group-tabs">`;
 for(let i=0;i<groups.length;i++){
-  const hasDraft=!!Object.keys(state?.group_states||{}).length||i<=curGroup;
+  const hasDraft=i<=curGroup;
   h+=`<button class="group-tab ${i===curGroup?'active':''} ${hasDraft?'has-draft':''}" onclick="switchGroup(${i})">${groups[i]?.label||'그룹'+(i+1)}</button>`}
 h+=`</div>`;
 // 초안 선택
