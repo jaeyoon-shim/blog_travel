@@ -555,15 +555,23 @@ renderPE();loadGrps()}
 
 // ═══ STEP 3: AI 생성 ═══
 function renderS3(){$et.textContent='🤖 AI 초안 생성';$badge.textContent='STEP 3';
-const places=[...new Set(photos.map(p=>p.location_name).filter(Boolean))];
 $eb.innerHTML=`
 <div class="card"><div class="card-label">글 스타일</div><select id="structSel"><option>감성 후기형</option><option>정보 가이드형</option><option>감성+정보 혼합형</option></select></div>
-<div class="card"><div class="card-label">장소별 메모</div>${places.map(pl=>`<div class="mb-6"><div class="text-xs text-fg2 mb-6">📍 ${esc(pl)}</div><input type="text" class="memo-in" data-place="${esc(pl)}" value="${esc(placeMemos[pl]||'')}" placeholder="메모..." onchange="placeMemos['${esc(pl)}']=this.value"></div>`).join('')}</div>
-<div class="flex gap-6">
-  <button class="btn btn-pri" style="flex:1" onclick="doGen()">✨ 선택한 Day 생성</button>
+<div class="card-label mt-12">📅 날짜별 일정 — 생성할 Day를 고르세요</div>
+<div id="dayList" class="mt-6"><div class="text-xs text-fg3">불러오는 중…</div></div>
+<div class="flex gap-6 mt-12">
+  <button class="btn btn-pri" style="flex:1" onclick="doGen()">✨ 선택한 Day만 생성</button>
   <button class="btn btn-ok" style="flex:1" onclick="doGenAll()">🚀 전체 일정 생성</button>
-</div>
-<div class="text-xs text-fg3 mt-6">현재 선택: Day ${curGroup+1} / 전체 ${groups.length}일</div>`}
+</div>`;
+loadDayList()}
+async function loadDayList(){
+  try{const r=await fetch(`${API}/api/groups`);groups=await r.json()}catch(e){groups=[]}
+  if(curGroup>=groups.length)curGroup=0;
+  renderDayList()}
+function renderDayList(){
+  const c=document.getElementById('dayList');if(!c)return;
+  if(!groups.length){c.innerHTML='<div class="text-xs text-fg3">일정이 없습니다. 2단계에서 계획을 확인하세요.</div>';return}
+  c.innerHTML=groups.map((g,i)=>`<div class="block-item ${i===curGroup?'selected':''}" onclick="curGroup=${i};renderDayList()"><div class="bt">Day ${i+1}${g.label?(' · '+esc(g.label)):''}</div><div class="bc">${esc(g.course_line||'(장소 미정)')} · 사진 ${g.photo_count||0}장</div></div>`).join('')}
 
 async function doGen(){show('AI 초안 생성 중...');
 const memos={...placeMemos};document.querySelectorAll('.memo-in').forEach(e=>{if(e.value)memos[e.dataset.place]=e.value});
