@@ -230,7 +230,8 @@ def test_build_draft_days_and_unconfident_name_blanked():
     names = {s["name"]: s["name_source"]
              for d in plan["days"] for s in d["stops"]}
     assert "오타루 운하" in names and names["오타루 운하"] == "auto"
-    assert "" in names and names[""] == "none"
+    # 무료모드: 확신 없어도 GPS 중립 장소명이 있으면 채워짐(auto), 사용자가 수정
+    assert "동네 카페" in names and names["동네 카페"] == "auto"
 
 
 def test_build_draft_merges_same_name_and_no_mutation():
@@ -358,3 +359,15 @@ def test_stops_group_by_gps_when_unnamed():
     ]
     st2 = TripPlanner.build_draft(photos2)["days"][0]["stops"]
     assert len(st2) == 1 and len(st2[0]["photo_ids"]) == 2
+
+
+def test_stops_fill_neutral_name_when_unconfident():
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 카페", False, 43.10, 140.10),  # 무확신 + 중립명 + gps
+        _pr("u/b.jpg", "2026:06:22 12:00:00", "", False),                          # 이름·gps 없음 → 비움
+    ]
+    plan = TripPlanner.build_draft(photos)
+    stops = plan["days"][0]["stops"]
+    byname = {s["name"]: s["name_source"] for s in stops}
+    assert byname.get("오타루 카페") == "auto"       # 중립명 채워짐
+    assert "" in byname and byname[""] == "none"     # 진짜 빈 것만 none

@@ -1589,21 +1589,23 @@ class TripPlanner:
         groups = []       # [[key, name, [pids]]]
         index = {}        # key -> groups idx
         for pid, p in items:
-            name = p.get("location_name", "") if p.get("name_confident") else ""
-            if name:
-                key = "name:" + name
+            loc = p.get("location_name", "")
+            conf = p.get("name_confident")
+            if conf and loc:
+                key = "name:" + loc          # 확신 → 이름으로 묶기
             else:
                 g = p.get("gps") or {}
                 lat, lon = g.get("lat"), g.get("lon")
                 if lat is not None and lon is not None:
                     key = "gps:%.3f,%.3f" % (round(lat, 3), round(lon, 3))
                 else:
-                    key = "solo:%d" % len(groups)   # 항상 새 그룹
+                    key = "solo:%d" % len(groups)
+            disp = loc                        # 표시 이름: 확신 아니어도 중립명 사용
             if key in index:
                 groups[index[key]][2].append(pid)
             else:
                 index[key] = len(groups)
-                groups.append([key, name, [pid]])
+                groups.append([key, disp, [pid]])
         stops = []
         for order, (key, name, pids) in enumerate(groups, 1):
             stops.append({
