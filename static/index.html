@@ -369,7 +369,8 @@ rdz.addEventListener('click',e=>{e.stopPropagation();rfi.click()});
 rfi.addEventListener('change',e=>{if(e.target.files.length)uploadReceipts(e.target.files)});
 rdz.addEventListener('dragover',e=>{e.preventDefault();e.stopPropagation();rdz.style.borderColor='var(--pri)'});
 rdz.addEventListener('dragleave',e=>{e.preventDefault();rdz.style.borderColor=''});
-rdz.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();rdz.style.borderColor='';if(e.dataTransfer.files.length)uploadReceipts(e.dataTransfer.files)})}
+rdz.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();rdz.style.borderColor='';if(e.dataTransfer.files.length)uploadReceipts(e.dataTransfer.files)});
+if($pc) $pc.innerHTML='<div style="text-align:center;padding:60px 30px;color:#9ca3af"><div style="font-size:40px;margin-bottom:12px">✈</div><div style="font-size:14px">사진을 업로드하면<br>계획·구조 미리보기가 표시됩니다</div></div>';}
 
 async function uploadFiles(files){
   const imgs=Array.from(files).filter(f=>f.type.startsWith('image/')||/\.(jpg|jpeg|png|gif|webp|heic)$/i.test(f.name));
@@ -442,7 +443,35 @@ function renderPlan(p){const root=document.getElementById('planRoot');if(!root)r
   const un=p.unmatched_receipts||[];
   const unHtml=un.length?`<div class="card" style="border-color:var(--warn)"><div class="card-label">🧾 미배정 영수증 ${un.length}</div><div class="text-xs text-fg3 mb-6">어느 장소 것인지 지정하세요</div>${un.map((r,i)=>`<div style="margin:6px 0;padding:6px 8px;background:var(--sf3);border-radius:6px"><div style="font-size:11px;color:var(--fg2);margin-bottom:4px">🧾 ${esc(r.store_name||'(가게명?)')} ${r.amount!=null?esc((r.currency||'')+r.amount):''}${r.date?' · '+esc(r.date):''}</div><select onchange="assignReceipt(${i},this.value)" style="font-size:11px;width:100%;max-width:260px"><option value="">장소 선택…</option>${stopOptions(null)}</select></div>`).join('')}</div>`:'';
   root.innerHTML=unHtml+p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>stopCard(s)).join('')}</div>`).join('')
-    +((p.undated_photo_ids&&p.undated_photo_ids.length)?`<div class="text-xs text-fg3 mt-6">📅 날짜 미상 사진 ${p.undated_photo_ids.length}장</div>`:'')}
+    +((p.undated_photo_ids&&p.undated_photo_ids.length)?`<div class="text-xs text-fg3 mt-6">📅 날짜 미상 사진 ${p.undated_photo_ids.length}장</div>`:'');
+  window._plan=p; renderOutline();}
+
+function renderOutline(){
+  const p=window._plan; if(!p||!$pc)return;
+  let h=`<div style="max-width:560px;margin:0 auto">`;
+  h+=`<div style="text-align:center;font-size:12px;color:#8a8f75;margin-bottom:14px">📋 게시물 구조 미리보기 — Day별로 이렇게 작성됩니다</div>`;
+  (p.days||[]).forEach(d=>{
+    h+=`<div style="border:1px solid #e3e7d8;border-radius:12px;padding:16px;margin-bottom:14px;background:#fcfbf5">`;
+    h+=`<div style="font-weight:700;color:#3d3d3d;margin-bottom:10px">📅 Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>`;
+    h+=`<div style="color:#9a9f85;font-size:12px;margin-bottom:6px">제목 · 인트로</div>`;
+    (d.stops||[]).forEach((s,i)=>{
+      if(i>0) h+=`<div style="color:#b0b49a;font-size:11px;margin:6px 0 6px 8px">🚆 이동</div>`;
+      const name=s.name||'(장소명 미정)';
+      const cnt=(s.photo_ids||[]).length;
+      const bits=[];
+      if(s.events&&s.events.length) bits.push(s.events.join(', '));
+      if(s.feeling) bits.push(s.feeling);
+      let meta='';
+      if(s.rating!=null) meta+='⭐'+s.rating+' ';
+      if(s.receipt&&s.receipt.amount!=null) meta+=(s.receipt.currency||'')+s.receipt.amount;
+      h+=`<div style="margin:8px 0;padding:8px 10px;background:#fff;border:1px solid #eee;border-radius:8px"><div style="color:#5a7d3a;font-weight:600;font-size:13px">📍 ${esc(name)} <span style="color:#aaa;font-weight:400;font-size:11px">사진 ${cnt}장</span></div>${bits.length?`<div style="color:#888;font-size:11px;margin-top:2px">${esc(bits.join(' · '))}</div>`:''}${meta?`<div style="color:#888;font-size:11px;margin-top:2px">${esc(meta)}</div>`:''}</div>`;
+    });
+    h+=`<div style="color:#9a9f85;font-size:12px;margin-top:6px">꿀팁 · 마무리</div>`;
+    h+=`</div>`;
+  });
+  h+=`</div>`;
+  $pc.innerHTML=h;
+}
 
 function stopThumbs(s){
   const ids=(s.photo_ids||[]); if(!ids.length)return '';
@@ -599,7 +628,7 @@ $eb.innerHTML=`
   <button class="btn btn-pri" style="flex:1" onclick="doGen()">✨ 선택한 Day만 생성</button>
   <button class="btn btn-ok" style="flex:1" onclick="doGenAll()">🚀 전체 일정 생성</button>
 </div>`;
-loadDayList()}
+loadDayList();renderOutline();}
 async function loadDayList(){
   try{const r=await fetch(`${API}/api/groups`);groups=await r.json()}catch(e){groups=[]}
   if(curGroup>=groups.length)curGroup=0;
