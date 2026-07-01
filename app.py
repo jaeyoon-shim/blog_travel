@@ -303,8 +303,11 @@ def api_status():
     return jsonify({
         "step": state["current_step"],
         "completed": list(state["completed"]),
+        "upload_count": len(state.get("photo_paths", [])),
         "photo_count": len(state["photo_results"]),
         "group_count": len(_active_groups()),
+        "has_plan": bool((state.get("plan") or {}).get("days")),
+        "has_drafts": any(gs.get("drafts") for gs in state.get("group_states", {}).values()),
         "progress": state["progress"],
     })
 
