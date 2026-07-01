@@ -243,9 +243,9 @@ def api_profiles():
 
 
 @app.route('/api/profiles/<name>', methods=['GET'])
-def api_profile_load(n):
+def api_profile_load(name):
     """프로필 로드"""
-    f = PROFILE_DIR / f"{n}.json"
+    f = PROFILE_DIR / f"{name}.json"
     if not f.exists():
         return jsonify({"error": "프로필 없음"}), 404
     with open(f, 'r', encoding='utf-8') as fp:
@@ -258,8 +258,8 @@ def api_profile_load(n):
     if os.environ.get("NAVER_PASSWORD"): api["naver_pw"] = os.environ["NAVER_PASSWORD"]
     data["api"] = api
     state["settings"] = data
-    LAST_PROFILE.write_text(n, encoding='utf-8')
-    logger.info(f"⚙️ 프로필 로드: {n}")
+    LAST_PROFILE.write_text(name, encoding='utf-8')
+    logger.info(f"프로필 로드: {name}")
     return jsonify(data)
 
 
@@ -288,12 +288,12 @@ def api_profile_save():
 
 
 @app.route('/api/profiles/<name>', methods=['DELETE'])
-def api_profile_delete(n):
+def api_profile_delete(name):
     """프로필 삭제"""
-    f = PROFILE_DIR / f"{n}.json"
+    f = PROFILE_DIR / f"{name}.json"
     if f.exists():
         f.unlink()
-        logger.info(f"⚙️ 프로필 삭제: {n}")
+        logger.info(f"프로필 삭제: {name}")
     return jsonify({"deleted": True})
 
 
