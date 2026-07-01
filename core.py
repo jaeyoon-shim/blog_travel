@@ -1580,20 +1580,28 @@ class TripPlanner:
 
     @staticmethod
     def _stops_for_day(items):
-        """하루치 (pid, photo) 튜플 목록 → 장소(stop) 목록.
-        같은 location_name끼리 묶음(빈 이름은 개별 stop). 입력 dict 비변형."""
-        groups = []       # [(name, [pids])]
-        index = {}        # name → groups idx
+        """하루치 (pid, photo) 튜플 → 장소(stop) 목록.
+        확신 이름=이름별, 무확신+GPS=근접 클러스터(~110m), GPS없음=개별. 입력 비변형."""
+        groups = []       # [[key, name, [pids]]]
+        index = {}        # key -> groups idx
         for pid, p in items:
             name = p.get("location_name", "") if p.get("name_confident") else ""
-            if name and name in index:
-                groups[index[name]][1].append(pid)
+            if name:
+                key = "name:" + name
             else:
-                if name:
-                    index[name] = len(groups)
-                groups.append((name, [pid]))
+                g = p.get("gps") or {}
+                lat, lon = g.get("lat"), g.get("lon")
+                if lat is not None and lon is not None:
+                    key = "gps:%.3f,%.3f" % (round(lat, 3), round(lon, 3))
+                else:
+                    key = "solo:%d" % len(groups)   # 항상 새 그룹
+            if key in index:
+                groups[index[key]][2].append(pid)
+            else:
+                index[key] = len(groups)
+                groups.append([key, name, [pid]])
         stops = []
-        for order, (name, pids) in enumerate(groups, 1):
+        for order, (key, name, pids) in enumerate(groups, 1):
             stops.append({
                 "stop_id": "s" + pids[0][1:],
                 "order": order,

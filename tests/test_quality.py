@@ -336,3 +336,25 @@ def test_match_receipts_to_stops():
     plan3, un2 = TripPlanner.match_receipts_to_stops(plan2, receipts)
     sb3 = [s for d in plan3["days"] for s in d["stops"] if s["name"] == "스타벅스 삿포로"][0]
     assert sb3["receipt"]["amount"] == 600 and len(un2) == 1
+
+
+# ── 같은 위치(GPS) 사진 묶기 ──
+def test_stops_group_by_gps_when_unnamed():
+    # 이름 없는(name_confident=False) 두 사진이 같은 GPS → 한 stop
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "카페", False, 43.1901, 140.9902),
+        _pr("u/b.jpg", "2026:06:22 10:05:00", "노포", False, 43.1902, 140.9903),  # ~같은 위치
+        _pr("u/c.jpg", "2026:06:22 12:00:00", "먼곳",  False, 43.2500, 141.3500),  # 다른 위치
+    ]
+    plan = TripPlanner.build_draft(photos)
+    stops = plan["days"][0]["stops"]
+    # a,b 는 한 stop(사진 2장), c 는 별도 stop
+    sizes = sorted(len(s["photo_ids"]) for s in stops)
+    assert sizes == [1, 2], sizes
+    # 확신 이름이 있으면 이름으로 묶임(기존 유지)
+    photos2 = [
+        _pr("u/x.jpg", "2026:06:22 09:00:00", "스타벅스", True, 1.0, 1.0),
+        _pr("u/y.jpg", "2026:06:22 18:00:00", "스타벅스", True, 9.0, 9.0),  # 이름 같으면 위치 달라도 묶임
+    ]
+    st2 = TripPlanner.build_draft(photos2)["days"][0]["stops"]
+    assert len(st2) == 1 and len(st2[0]["photo_ids"]) == 2
