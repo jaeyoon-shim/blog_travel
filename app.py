@@ -465,9 +465,12 @@ def api_plan_draft():
         return jsonify({"error": "사진 분석을 먼저 실행하세요"}), 400
     from core import TripPlanner
     free_mode = _is_free_mode()
+    _old_plan = state.get("plan")
     state["plan"] = TripPlanner.build_draft(state["photo_results"], free_mode=free_mode)
     if state["receipts"]:
         TripPlanner.match_receipts_to_stops(state["plan"], state["receipts"])
+    if _old_plan and _old_plan.get("days"):
+        TripPlanner.merge_user_edits(state["plan"], _old_plan)
     _save_plan()
     return jsonify(state["plan"])
 

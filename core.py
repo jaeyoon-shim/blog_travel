@@ -1648,6 +1648,30 @@ class TripPlanner:
         plan["unmatched_receipts"] = unmatched
         return plan, unmatched
 
+    @staticmethod
+    def merge_user_edits(new_plan, old_plan):
+        """재생성된 new_plan에 old_plan의 사용자 편집을 이식.
+        photo_id 겹침이 가장 많은 구 stop을 매칭. 영수증은 제외(매칭이 별도 처리). 네트워크 X."""
+        from collections import Counter
+        old_stops = [s for d in (old_plan or {}).get("days", []) for s in d.get("stops", [])]
+        pid_to_old = {}
+        for i, s in enumerate(old_stops):
+            for pid in s.get("photo_ids", []):
+                pid_to_old[pid] = i
+        for d in new_plan.get("days", []):
+            for s in d.get("stops", []):
+                c = Counter(pid_to_old[pid] for pid in s.get("photo_ids", []) if pid in pid_to_old)
+                if not c:
+                    continue
+                old = old_stops[c.most_common(1)[0][0]]
+                if old.get("name_source") == "user" and old.get("name"):
+                    s["name"], s["name_source"] = old["name"], "user"
+                for k in ("events", "feeling", "ai_instruction", "rating", "show_rating", "show_price"):
+                    v = old.get(k)
+                    if v not in (None, "", []):
+                        s[k] = v
+        return new_plan
+
 
 class ReceiptReader:
     """영수증 이미지 → {store_name, amount, currency, date}. (이 태스크는 파싱만)"""

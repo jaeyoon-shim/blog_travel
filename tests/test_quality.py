@@ -371,3 +371,24 @@ def test_stops_fill_neutral_name_when_unconfident():
     byname = {s["name"]: s["name_source"] for s in stops}
     assert byname.get("오타루 카페") == "auto"       # 중립명 채워짐
     assert "" in byname and byname[""] == "none"     # 진짜 빈 것만 none
+
+
+# ── 재생성 시 사용자 편집 보존·병합 ──
+def test_merge_user_edits():
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True),
+        _pr("u/c.jpg", "2026:06:23 09:00:00", "삿포로 TV타워", True),
+    ]
+    old = TripPlanner.build_draft(photos)
+    s = old["days"][0]["stops"][0]
+    s["name"] = "오타루 운하 본점"; s["name_source"] = "user"
+    s["events"] = ["운하 산책"]; s["feeling"] = "로맨틱"; s["rating"] = 4.5
+    # 재분석 → 편집 없는 새 초안 (같은 사진들이라 photo_id 동일)
+    new = TripPlanner.build_draft(photos)
+    TripPlanner.merge_user_edits(new, old)
+    st0 = new["days"][0]["stops"][0]
+    assert st0["name"] == "오타루 운하 본점" and st0["name_source"] == "user"
+    assert st0["events"] == ["운하 산책"] and st0["feeling"] == "로맨틱" and st0["rating"] == 4.5
+    # 편집 없던 Day2는 그대로
+    st1 = new["days"][1]["stops"][0]
+    assert st1["name"] == "삿포로 TV타워" and st1["rating"] is None
