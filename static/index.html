@@ -18,8 +18,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--fg);height:100vh;o
 .step-btn.active{background:var(--pri);border-color:var(--pri);color:#fff}
 .step-btn.done{border-color:var(--ok);color:var(--ok)}
 .hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.settings-btn{padding:5px 12px;border-radius:8px;font-size:11px;border:1px solid var(--bd);background:transparent;color:var(--fg2);cursor:pointer}
-.settings-btn:hover{border-color:var(--pri);color:var(--pri)}
 .status-pill{font-size:11px;padding:3px 10px;border-radius:10px;background:var(--sf2);color:var(--fg2);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .status-pill.busy{background:var(--pri-glow);color:var(--pri);animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
@@ -92,19 +90,19 @@ textarea{resize:vertical;min-height:50px;line-height:1.5}
   <header class="header">
     <div class="logo">✈ TravelBlog Pro</div>
     <div class="steps" id="steps">
-      <button class="step-btn active" data-step="1">1. 업로드</button>
-      <button class="step-btn" data-step="2">2. 계획검수</button>
-      <button class="step-btn" data-step="3">3. AI생성</button>
-      <button class="step-btn" data-step="4">4. 편집</button>
-      <button class="step-btn" data-step="5">5. 발행</button>
+      <button class="step-btn active" data-step="1">1. 설정</button>
+      <button class="step-btn" data-step="2">2. 업로드</button>
+      <button class="step-btn" data-step="3">3. 계획검수</button>
+      <button class="step-btn" data-step="4">4. AI생성</button>
+      <button class="step-btn" data-step="5">5. 편집</button>
+      <button class="step-btn" data-step="6">6. 발행</button>
     </div>
     <div class="hdr-right">
-      <button class="settings-btn" onclick="goSettings()">⚙️ 설정</button>
       <div class="status-pill" id="statusPill">준비</div>
     </div>
   </header>
   <div class="editor">
-    <div class="editor-hdr"><span class="editor-title" id="editorTitle">📸 업로드</span><span class="editor-badge" id="editorBadge">STEP 1</span></div>
+    <div class="editor-hdr"><span class="editor-title" id="editorTitle">⚙️ 설정</span><span class="editor-badge" id="editorBadge">STEP 1</span></div>
     <div class="editor-body" id="editorBody"></div>
   </div>
   <div class="preview">
@@ -153,7 +151,7 @@ function stopPoll(){if(pollTimer){clearInterval(pollTimer);pollTimer=null}}
 // ── 네비 ──
 document.querySelectorAll('.step-btn').forEach(b=>b.addEventListener('click',()=>go(+b.dataset.step)));
 function go(n){step=n;document.querySelectorAll('.step-btn').forEach(b=>{b.classList.remove('active');if(+b.dataset.step===n)b.classList.add('active')});render()}
-function render(){({'-1':renderProfileSelect,0:renderSettings,1:renderS1,2:renderS2,3:renderS3,4:renderS4,5:renderS5})[String(step)]?.()}
+function render(){({'-1':renderProfileSelect,1:renderSettings,2:renderS1,3:renderS2,4:renderS3,5:renderS4,6:renderS5})[String(step)]?.()}
 
 let profileName='';  // 현재 프로필명
 
@@ -209,13 +207,13 @@ async function selectProfile(name){
     if(d.error){stat('로드 실패');alert(d.error);return}
     settings=d;profileName=name;refUrls=d.ref_urls||[];
     stat(`✅ "${name}" 프로필 로드됨`);
-    go(0);   // 설정 화면으로 → 불러온 저장사항을 바로 확인
+    go(1);   // 설정 화면으로 → 불러온 저장사항을 바로 확인
   }catch(e){stat('로드 실패');alert('프로필 로드 오류: '+e.message+'\n앱 재시작(python app.py)이 필요할 수 있습니다.');}
 }
 
 function newProfile(){
   profileName='';settings=JSON.parse(JSON.stringify(DEFAULT_SETTINGS));refUrls=[];
-  go(0);
+  go(1);
 }
 
 const DEFAULT_SETTINGS={
@@ -237,11 +235,9 @@ async function loadSettings(){
 }
 loadSettings();
 
-function goSettings(){go(0)}
-
-// ═══ STEP 0: 설정 ═══
+// ═══ STEP 1: 설정 ═══
 function renderSettings(){
-  $et.textContent='⚙️ 설정';$badge.textContent='SETTINGS';
+  $et.textContent='⚙️ 설정';$badge.textContent='STEP 1';
   const s=settings;const bs=s.blog_style||{};const ds=s.design||{};const api=s.api||{};const cp=s.custom_prompt||{};
 
   // 우측: 설정 예시 미리보기
@@ -352,12 +348,12 @@ async function saveProfile(){
     ref_urls:refUrls};
   await fetch(`${API}/api/profiles/save`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_name:name,settings:d})});
   settings=d;profileName=name;stat(`✅ "${name}" 프로필 저장됨`);
-  go(1);
+  go(2);
 }
 
-// ═══ STEP 1: 업로드 ═══
-function renderS1(){$et.textContent='📸 사진 업로드';$badge.textContent='STEP 1';
-$eb.innerHTML=`<div class="dropzone" id="dz"><div style="font-size:32px;margin-bottom:8px">📁</div><div class="text-sm text-fg2">클릭하여 사진 선택 또는 드래그 & 드롭</div></div><input type="file" id="fi" multiple accept="image/*" style="display:none"><div id="upPhotos" class="mt-8"></div><div class="card-label mt-12">🧾 영수증 (선택)</div><div class="text-xs text-fg3 mb-6">가격·별점 근거. 올리면 가게명·금액을 자동 인식해 2단계에서 장소에 매칭됩니다.</div><div class="dropzone" id="rdz" style="padding:16px"><div style="font-size:24px;margin-bottom:6px">🧾</div><div class="text-sm text-fg2">영수증 이미지 클릭/드롭</div></div><input type="file" id="rfi" multiple accept="image/*" style="display:none"><div id="rcList" class="mt-8"></div><button class="btn btn-pri w-full mt-8 hidden" id="anaBtn" onclick="doAnalyze()">🔍 사진 분석 시작</button>`;
+// ═══ STEP 2: 업로드 ═══
+function renderS1(){$et.textContent='📸 사진 업로드';$badge.textContent='STEP 2';
+$eb.innerHTML=`<div class="dropzone" id="dz"><div style="font-size:32px;margin-bottom:8px">📁</div><div class="text-sm text-fg2">클릭하여 사진 선택 또는 드래그 & 드롭</div></div><input type="file" id="fi" multiple accept="image/*" style="display:none"><div id="upPhotos" class="mt-8"></div><div class="card-label mt-12">🧾 영수증 (선택)</div><div class="text-xs text-fg3 mb-6">가격·별점 근거. 올리면 가게명·금액을 자동 인식해 3단계에서 장소에 매칭됩니다.</div><div class="dropzone" id="rdz" style="padding:16px"><div style="font-size:24px;margin-bottom:6px">🧾</div><div class="text-sm text-fg2">영수증 이미지 클릭/드롭</div></div><input type="file" id="rfi" multiple accept="image/*" style="display:none"><div id="rcList" class="mt-8"></div><button class="btn btn-pri w-full mt-8 hidden" id="anaBtn" onclick="doAnalyze()">🔍 사진 분석 시작</button>`;
 const fi=document.getElementById('fi'),dz=document.getElementById('dz');
 dz.addEventListener('click',e=>{e.stopPropagation();fi.click()});
 fi.addEventListener('change',e=>{if(e.target.files.length)uploadFiles(e.target.files)});
@@ -402,7 +398,7 @@ async function uploadReceipts(files){
 function renderReceiptList(items,total){
   const c=document.getElementById('rcList');if(!c)return;
   c.innerHTML=`<div class="text-xs text-fg3 mb-6">인식된 영수증 ${total}장</div>`+
-    items.map(r=>`<div class="text-xs" style="padding:3px 0;border-top:1px solid var(--bd)">🧾 ${esc(r.store_name||'(가게명 미인식 — 2단계에서 입력)')} ${r.amount!=null?esc((r.currency||'')+r.amount):''}${r.date?' · '+esc(r.date):''}</div>`).join('');
+    items.map(r=>`<div class="text-xs" style="padding:3px 0;border-top:1px solid var(--bd)">🧾 ${esc(r.store_name||'(가게명 미인식 — 3단계에서 입력)')} ${r.amount!=null?esc((r.currency||'')+r.amount):''}${r.date?' · '+esc(r.date):''}</div>`).join('');
 }
 
 async function doAnalyze(){show('사진 분석 중...');await fetch(`${API}/api/analyze`,{method:'POST'});
@@ -410,18 +406,31 @@ async function doAnalyze(){show('사진 분석 중...');await fetch(`${API}/api/
     if(p.status==='error'){alert('❌ 사진 분석 실패\n\n'+(p.message||'알 수 없는 오류'));return}
     if(p.status==='done'){const r=await fetch(`${API}/api/photos`);photos=await r.json();
       if(!photos.length){alert('분석된 사진이 없습니다. 사진을 먼저 업로드했는지 확인하세요.');return}
-      go(2)}
+      go(3)}
   })}
 
-// ═══ STEP 2: 계획 검수 ═══
-function renderS2(){$et.textContent='🗂 계획 검수';$badge.textContent='STEP 2';
+// ═══ STEP 3: 계획 검수 (일자별 기획 → 기획 수정) ═══
+let planTab='view';
+function switchPlanTab(t){planTab=t;
+  const rv=document.getElementById('planView'),rr=document.getElementById('planRoot');
+  if(rv)rv.style.display=t==='view'?'':'none';
+  if(rr)rr.style.display=t==='edit'?'':'none';
+  document.querySelectorAll('.plan-tab-btn').forEach(b=>b.classList.toggle('btn-pri',b.dataset.tab===t));
+  document.querySelectorAll('.plan-tab-btn').forEach(b=>b.classList.toggle('btn-ghost',b.dataset.tab!==t));
+}
+function renderS2(){$et.textContent='🗂 계획 검수';$badge.textContent='STEP 3';
 $eb.innerHTML=`
 <div id="planBanner" class="card" style="display:none;background:#F6EBCB;color:#8A6D1F;border-color:#E7D493">무료 모드 — 상호명 정확도 낮음, 검수 권장</div>
 <details style="margin-bottom:8px"><summary style="cursor:pointer;font-size:12px;color:var(--fg2);padding:6px 2px;user-select:none">⚙ 여행 설정 · 제목 / 참고 블로그 URL</summary>
 <div class="card"><div class="card-label">여행 제목</div><input type="text" id="tt" value="${esc(tripTitle)}" placeholder="예: 후쿠오카 2박3일" oninput="tripTitle=this.value"></div>
 <div class="card"><div class="card-label">참고 블로그 URL (문체 분석)</div><div id="refList"></div><div class="flex gap-6 mt-6"><input type="text" id="refIn" placeholder="https://blog.naver.com/..." style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addRef()}"><button class="btn btn-ghost btn-sm" onclick="addRef()">+ 추가</button></div><button class="btn btn-ghost btn-sm mt-6" onclick="doStyle()">🔍 스타일 분석 ${refUrls.length?'('+refUrls.length+'개)':''}</button></div>
 </details>
-<div id="planRoot"><div class="text-xs text-fg3">불러오는 중...</div></div>
+<div class="flex gap-6 mb-8">
+  <button class="btn ${planTab==='view'?'btn-pri':'btn-ghost'} plan-tab-btn" data-tab="view" onclick="switchPlanTab('view')" style="flex:1">📋 일자별 기획</button>
+  <button class="btn ${planTab==='edit'?'btn-pri':'btn-ghost'} plan-tab-btn" data-tab="edit" onclick="switchPlanTab('edit')" style="flex:1">✏️ 기획 수정</button>
+</div>
+<div id="planView" style="display:${planTab==='view'?'':'none'}"><div class="text-xs text-fg3">불러오는 중...</div></div>
+<div id="planRoot" style="display:${planTab==='edit'?'':'none'}"><div class="text-xs text-fg3">불러오는 중...</div></div>
 <button class="btn btn-ghost w-full mt-12" onclick="manualSave()">💾 저장</button>
 <button class="btn btn-pri w-full mt-6" onclick="nextFromPlan()">다음: AI 생성 →</button>
 <span id="planSaveInd" style="font-size:11px;color:var(--fg3);margin-left:10px"></span>`;
@@ -444,12 +453,29 @@ async function loadPlan(){
   renderPlan(p)}
 
 function renderPlan(p){const root=document.getElementById('planRoot');if(!root)return;
-  if(!p.days||!p.days.length){root.innerHTML='<div class="text-xs text-fg3">계획이 비어 있습니다.</div>';return}
+  if(!p.days||!p.days.length){
+    root.innerHTML='<div class="text-xs text-fg3">계획이 비어 있습니다.</div>';
+    const rv0=document.getElementById('planView');if(rv0)rv0.innerHTML='<div class="text-xs text-fg3">계획이 비어 있습니다.</div>';
+    return}
   const un=p.unmatched_receipts||[];
   const unHtml=un.length?`<div class="card" style="border-color:var(--warn)"><div class="card-label">🧾 미배정 영수증 ${un.length}</div><div class="text-xs text-fg3 mb-6">어느 장소 것인지 지정하세요</div>${un.map((r,i)=>`<div style="margin:6px 0;padding:6px 8px;background:var(--sf3);border-radius:6px"><div style="font-size:11px;color:var(--fg2);margin-bottom:4px">🧾 ${esc(r.store_name||'(가게명?)')} ${r.amount!=null?esc((r.currency||'')+r.amount):''}${r.date?' · '+esc(r.date):''}</div><select onchange="assignReceipt(${i},this.value)" style="font-size:11px;width:100%;max-width:260px"><option value="">장소 선택…</option>${stopOptions(null)}</select></div>`).join('')}</div>`:'';
   root.innerHTML=unHtml+p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>stopCard(s)).join('')}</div>`).join('')
     +((p.undated_photo_ids&&p.undated_photo_ids.length)?`<div class="text-xs text-fg3 mt-6">📅 날짜 미상 사진 ${p.undated_photo_ids.length}장</div>`:'');
-  window._plan=p; renderOutline();}
+  window._plan=p; renderOutline(); renderPlanView(p);}
+
+function renderPlanView(p){
+  const el=document.getElementById('planView'); if(!el)return;
+  el.innerHTML=p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>{
+    const name=s.name||'(장소명 미정)';
+    const cnt=(s.photo_ids||[]).length;
+    const bits=[]; if(s.events&&s.events.length)bits.push(s.events.join(', ')); if(s.feeling)bits.push(s.feeling);
+    return `<div style="padding:8px 10px;margin:8px 0;background:var(--sf3);border:1px solid var(--bd);border-radius:8px">
+      <div style="font-weight:600;font-size:13px;color:var(--pri)">📍 ${esc(name)} <span style="color:var(--fg3);font-weight:400;font-size:11px">사진 ${cnt}장</span></div>
+      ${bits.length?`<div style="font-size:11px;color:var(--fg2);margin-top:3px">${esc(bits.join(' · '))}</div>`:''}
+    </div>`;
+  }).join('')}</div>`).join('')
+    +((p.undated_photo_ids&&p.undated_photo_ids.length)?`<div class="text-xs text-fg3 mt-6">📅 날짜 미상 사진 ${p.undated_photo_ids.length}장</div>`:'');
+}
 
 function renderOutline(){
   const p=window._plan; if(!p||!$pc)return;
@@ -591,7 +617,7 @@ function assignReceipt(idx,stopId){if(!planData||!stopId)return;const un=planDat
 function reassignReceipt(fromId,toId){if(!planData||toId===fromId)return;const from=findStop(planData,fromId);if(!from||!from.receipt)return;const rc=from.receipt;from.receipt=null;planData.unmatched_receipts=planData.unmatched_receipts||[];if(toId==='__none__'){planData.unmatched_receipts.push(rc);}else{const to=findStop(planData,toId);if(to){if(to.receipt)planData.unmatched_receipts.push(to.receipt);to.receipt=rc;}}savePlan().then(reloadPlan);}
 
 
-async function nextFromPlan(){await savePlan();try{await loadGrps()}catch(e){}go(3)}
+async function nextFromPlan(){await savePlan();try{await loadGrps()}catch(e){}go(4)}
 
 function renderRefs(){const c=document.getElementById('refList');if(!c)return;
 c.innerHTML=refUrls.length?refUrls.map((u,i)=>`<div class="flex items-center gap-6" style="margin-bottom:3px"><span class="text-xs text-fg2" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u)}">🔗 ${esc(u)}</span><button class="ba-btn" onclick="refUrls.splice(${i},1);renderRefs()">×</button></div>`).join(''):'<div class="text-xs text-fg3">아직 없음</div>'}
@@ -628,8 +654,8 @@ function updPhoto(i,nn){nn=nn.trim();if(!nn||i<0||i>=photos.length)return;photos
 fetch(`${API}/api/photos/update`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:i,location_name:nn})}).catch(()=>{});
 renderPE();loadGrps()}
 
-// ═══ STEP 3: AI 생성 ═══
-function renderS3(){$et.textContent='🤖 AI 초안 생성';$badge.textContent='STEP 3';
+// ═══ STEP 4: AI 생성 ═══
+function renderS3(){$et.textContent='🤖 AI 초안 생성';$badge.textContent='STEP 4';
 $eb.innerHTML=`
 <div class="card"><div class="card-label">글 스타일</div><select id="structSel"><option>감성 후기형</option><option>정보 가이드형</option><option>감성+정보 혼합형</option></select></div>
 <div class="card-label mt-12">📅 날짜별 일정 — 생성할 Day를 고르세요</div>
@@ -645,7 +671,7 @@ async function loadDayList(){
   renderDayList()}
 function renderDayList(){
   const c=document.getElementById('dayList');if(!c)return;
-  if(!groups.length){c.innerHTML='<div class="text-xs text-fg3">일정이 없습니다. 2단계에서 계획을 확인하세요.</div>';return}
+  if(!groups.length){c.innerHTML='<div class="text-xs text-fg3">일정이 없습니다. 3단계에서 계획을 확인하세요.</div>';return}
   c.innerHTML=groups.map((g,i)=>`<div class="block-item ${i===curGroup?'selected':''}" onclick="curGroup=${i};renderDayList()"><div class="bt">Day ${i+1}${g.label?(' · '+esc(g.label)):''}</div><div class="bc">${esc(g.course_line||'(장소 미정)')} · 사진 ${g.photo_count||0}장</div></div>`).join('')}
 
 async function doGen(){show('AI 초안 생성 중...');
@@ -655,7 +681,7 @@ startPoll(async p=>{
   if(p.status==='error'){alert('❌ 초안 생성 실패\n\n'+(p.message||'알 수 없는 오류')+'\n\n(OpenAI 키/모델/네트워크를 확인하세요)');return}
   if(p.status==='done'){await loadDrafts(curGroup);
     if(!drafts||!drafts.length){alert('초안이 만들어지지 않았습니다.\n원인: OpenAI 호출 실패 가능(키/모델/잔액/네트워크). 설정에서 OPENAI_API_KEY·모델을 확인하세요.');return}
-    go(4)}
+    go(5)}
 })}
 
 async function doGenAll(){show('전체 그룹 생성 중...');
@@ -665,16 +691,16 @@ startPoll(async p=>{
   if(p.status==='error'){alert('❌ 전체 생성 실패\n\n'+(p.message||'알 수 없는 오류')+'\n\n(OpenAI 키/모델/네트워크를 확인하세요)');return}
   if(p.status==='done'){await loadDrafts(0);
     if(!drafts||!drafts.length){alert('초안이 만들어지지 않았습니다.\n원인: OpenAI 호출 실패 가능(키/모델/잔액/네트워크).');return}
-    go(4)}
+    go(5)}
 })}
 
 async function loadDrafts(gi){curGroup=gi;const r=await fetch(`${API}/api/drafts/${gi}`);drafts=await r.json();
 if(drafts.length){draftTitle=drafts[0].title;draftTags=drafts[0].tags;await loadBlocks(0)}}
 
 async function loadBlocks(di){curDraft=di;const r=await fetch(`${API}/api/blocks/${curGroup}/${di}`);const d=await r.json();
-blocks=d.blocks||[];draftTitle=d.title||draftTitle;draftTags=d.tags||draftTags;selBlock=-1;if(step===4){renderS4();updatePreview()}}
+blocks=d.blocks||[];draftTitle=d.title||draftTitle;draftTags=d.tags||draftTags;selBlock=-1;if(step===5){renderS4();updatePreview()}}
 
-// ═══ STEP 4: 편집 ═══
+// ═══ STEP 5: 편집 ═══
 function renderS4(){$et.textContent='✏️ 편집';$badge.textContent=`${blocks.length}블록`;
 if(!blocks.length && groups.length && !renderS4._al){renderS4._al=1;loadDrafts(curGroup).finally(()=>{renderS4._al=0})}  // 생성 후 재진입시 초안 자동 로드
 // 그룹 탭
@@ -696,13 +722,13 @@ h+='</div>';
 if(selBlock>=0&&selBlock<blocks.length){const b=blocks[selBlock];
 if(['text','styled_label','heading','route'].includes(b.type)){
 h+=`<div class="card mt-8"><div class="card-label">블록 #${selBlock+1} 편집</div><textarea id="bEdit" style="min-height:60px" oninput="editBlk(this.value)">${esc(b.content||'')}</textarea></div>`}}
-h+=`<button class="btn btn-ok w-full mt-12" onclick="go(5)">발행 준비 →</button>`;
+h+=`<button class="btn btn-ok w-full mt-12" onclick="go(6)">발행 준비 →</button>`;
 $eb.innerHTML=h}
 
 async function switchGroup(gi){if(gi===curGroup)return;
 const r=await fetch(`${API}/api/drafts/${gi}`);const d=await r.json();
 if(d.length){curGroup=gi;drafts=d;draftTitle=d[0].title;draftTags=d[0].tags;await loadBlocks(0);renderS4();updatePreview()}
-else{alert(`그룹 ${gi+1}의 초안이 아직 없습니다. STEP 3에서 전체 생성을 해주세요.`)}}
+else{alert(`그룹 ${gi+1}의 초안이 아직 없습니다. STEP 4에서 전체 생성을 해주세요.`)}}
 
 function selBlk(i){selBlock=i;renderS4();const pb=document.getElementById('previewBody');if(pb){pb.scrollTop=(pb.scrollHeight*(i/Math.max(blocks.length,1)))-80}}
 function editBlk(v){if(selBlock>=0&&selBlock<blocks.length){blocks[selBlock].content=v;updatePreview()}}
@@ -710,8 +736,8 @@ function mvBlk(i,d){const j=i+d;if(j<0||j>=blocks.length)return;[blocks[i],block
 function delBlk(i){blocks.splice(i,1);if(selBlock>=blocks.length)selBlock=blocks.length-1;renderS4();updatePreview()}
 function addBlk(t){const i=selBlock>=0?selBlock+1:blocks.length;blocks.splice(i,0,t==='text'?{type:'text',content:'(새 텍스트)'}:{type:'separator'});selBlock=i;renderS4();updatePreview()}
 
-// ═══ STEP 5: 발행 ═══
-function renderS5(){$et.textContent='🚀 발행';$badge.textContent='STEP 5';
+// ═══ STEP 6: 발행 ═══
+function renderS5(){$et.textContent='🚀 발행';$badge.textContent='STEP 6';
 const api=settings.api||{};
 $eb.innerHTML=`
 <div class="card"><div class="card-label">제목</div><input type="text" id="pTitle" value="${esc(draftTitle)}"></div>
@@ -745,7 +771,7 @@ async function doPubAll(){
       else failed.push(gi+1);
     }catch(e){failed.push(gi+1)}
   }
-  if(!gs.length){alert('생성된 초안이 없습니다. STEP 3에서 "전체 일정 생성"을 먼저 하세요.');return}
+  if(!gs.length){alert('생성된 초안이 없습니다. STEP 4에서 "전체 일정 생성"을 먼저 하세요.');return}
   if(failed.length && !confirm(`Day ${failed.join(', ')}의 초안을 불러오지 못해 제외됩니다.\n나머지 ${gs.length}일만 발행할까요?`))return;
   show(`전체 ${gs.length}일 발행 중...`);
   await fetch(`${API}/api/publish_all`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groups:gs,visibility:vis,method})});
@@ -768,18 +794,18 @@ async function init(){
     const profiles=d.profiles||[];const last=d.last_used||'';
 
     if(profiles.length && last){
-      // 마지막 사용 프로필 자동 로드
+      // 마지막 사용 프로필 자동 로드 → 이미 설정돼 있으니 바로 업로드로
       const r2=await fetch(`${API}/api/profiles/${encodeURIComponent(last)}`);
       const s=await r2.json();
-      if(!s.error){settings=s;profileName=last;refUrls=s.ref_urls||[];go(1);return}
+      if(!s.error){settings=s;profileName=last;refUrls=s.ref_urls||[];go(2);return}
     }
     if(profiles.length){
       go(-1);  // 프로필 선택 화면
     } else {
-      go(0);   // 새 프로필 만들기
+      go(1);   // 새 프로필 만들기 → 설정 화면
     }
   } catch(e){
-    go(0);  // 서버 오류 시 설정 화면
+    go(1);  // 서버 오류 시 설정 화면
   }
 }
 init();
