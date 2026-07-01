@@ -6,12 +6,12 @@
 <title>TravelBlog Pro v10</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0c0f1a;--sf:#151929;--sf2:#1d2340;--sf3:#252d4a;--bd:#2a3459;--fg:#e8ecf4;--fg2:#8b95b0;--fg3:#5a6380;--pri:#6366f1;--pri2:#4f46e5;--pri-glow:rgba(99,102,241,.15);--ok:#10b981;--warn:#f59e0b;--err:#ef4444;--olive:#8B9467;--radius:12px;--font:'Noto Sans KR',sans-serif}
+:root{--bg:#FBF8EF;--sf:#F3EFE1;--sf2:#F5F1E4;--sf3:#EDF2E1;--bd:#DBDAC3;--fg:#3B3F30;--fg2:#6E7458;--fg3:#9AA083;--pri:#7DB35A;--pri2:#6A9C47;--pri-glow:rgba(125,179,90,.16);--ok:#5AA24A;--warn:#C58A2C;--err:#D9534F;--olive:#8B9467;--radius:12px;--font:'Noto Sans KR',sans-serif}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:var(--font);background:var(--bg);color:var(--fg);height:100vh;overflow:hidden}
 .app{display:grid;grid-template-rows:52px 1fr;grid-template-columns:1fr 1fr;height:100vh}
 .header{grid-column:1/-1;background:var(--sf);border-bottom:1px solid var(--bd);display:flex;align-items:center;padding:0 20px;gap:12px}
-.logo{font-size:15px;font-weight:700;background:linear-gradient(135deg,var(--pri),#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.logo{font-size:15px;font-weight:700;background:linear-gradient(135deg,var(--pri),#a9d47f);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .steps{display:flex;gap:3px;margin-left:16px}
 .step-btn{padding:5px 14px;border-radius:18px;font-size:11px;font-weight:500;border:1px solid var(--bd);background:transparent;color:var(--fg3);cursor:pointer;transition:all .2s}
 .step-btn:hover{border-color:var(--fg3);color:var(--fg2)}
@@ -407,7 +407,7 @@ async function doAnalyze(){show('사진 분석 중...');await fetch(`${API}/api/
 // ═══ STEP 2: 계획 검수 ═══
 function renderS2(){$et.textContent='🗂 계획 검수';$badge.textContent='STEP 2';
 $eb.innerHTML=`
-<div id="planBanner" class="card" style="display:none;background:#5a3a3a;color:#ffd;border-color:#7a4a4a">무료 모드 — 상호명 정확도 낮음, 검수 권장</div>
+<div id="planBanner" class="card" style="display:none;background:#F6EBCB;color:#8A6D1F;border-color:#E7D493">무료 모드 — 상호명 정확도 낮음, 검수 권장</div>
 <details style="margin-bottom:8px"><summary style="cursor:pointer;font-size:12px;color:var(--fg2);padding:6px 2px;user-select:none">⚙ 여행 설정 · 제목 / 참고 블로그 URL</summary>
 <div class="card"><div class="card-label">여행 제목</div><input type="text" id="tt" value="${esc(tripTitle)}" placeholder="예: 후쿠오카 2박3일" oninput="tripTitle=this.value"></div>
 <div class="card"><div class="card-label">참고 블로그 URL (문체 분석)</div><div id="refList"></div><div class="flex gap-6 mt-6"><input type="text" id="refIn" placeholder="https://blog.naver.com/..." style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addRef()}"><button class="btn btn-ghost btn-sm" onclick="addRef()">+ 추가</button></div><button class="btn btn-ghost btn-sm mt-6" onclick="doStyle()">🔍 스타일 분석 ${refUrls.length?'('+refUrls.length+'개)':''}</button></div>
@@ -433,7 +433,7 @@ async function loadPlan(){
 function renderPlan(p){const root=document.getElementById('planRoot');if(!root)return;
   if(!p.days||!p.days.length){root.innerHTML='<div class="text-xs text-fg3">계획이 비어 있습니다.</div>';return}
   const un=p.unmatched_receipts||[];
-  const unHtml=un.length?`<div class="card" style="border-color:var(--warn)"><div class="card-label">🧾 미배정 영수증 ${un.length}</div><div class="text-xs text-fg3 mb-6">어느 장소 것인지 지정하세요</div>${un.map((r,i)=>`<div style="margin:6px 0;padding:6px 8px;background:var(--sf3);border-radius:6px"><div style="font-size:11px;color:#9c9;margin-bottom:4px">🧾 ${esc(r.store_name||'(가게명?)')} ${r.amount!=null?esc((r.currency||'')+r.amount):''}${r.date?' · '+esc(r.date):''}</div><select onchange="assignReceipt(${i},this.value)" style="font-size:11px;width:100%;max-width:260px"><option value="">장소 선택…</option>${stopOptions(null)}</select></div>`).join('')}</div>`:'';
+  const unHtml=un.length?`<div class="card" style="border-color:var(--warn)"><div class="card-label">🧾 미배정 영수증 ${un.length}</div><div class="text-xs text-fg3 mb-6">어느 장소 것인지 지정하세요</div>${un.map((r,i)=>`<div style="margin:6px 0;padding:6px 8px;background:var(--sf3);border-radius:6px"><div style="font-size:11px;color:var(--fg2);margin-bottom:4px">🧾 ${esc(r.store_name||'(가게명?)')} ${r.amount!=null?esc((r.currency||'')+r.amount):''}${r.date?' · '+esc(r.date):''}</div><select onchange="assignReceipt(${i},this.value)" style="font-size:11px;width:100%;max-width:260px"><option value="">장소 선택…</option>${stopOptions(null)}</select></div>`).join('')}</div>`:'';
   root.innerHTML=unHtml+p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>stopCard(s)).join('')}</div>`).join('')
     +((p.undated_photo_ids&&p.undated_photo_ids.length)?`<div class="text-xs text-fg3 mt-6">📅 날짜 미상 사진 ${p.undated_photo_ids.length}장</div>`:'')}
 
