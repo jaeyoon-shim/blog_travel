@@ -439,18 +439,23 @@ def _is_free_mode():
     return not bool(state["settings"]["api"].get("google_key", ""))
 
 
-def _plan_path():
+def _plan_dir():
     title = (state.get("plan") or {}).get("trip_title", "") or "untitled"
     safe = "".join(c for c in title if c.isalnum() or c in " _-").strip() or "untitled"
-    d = os.path.join("plans", safe)
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "plan.json")
+    return os.path.join("plans", safe)
 
 def _save_plan():
     if not state.get("plan"):
         return
     try:
-        with open(_plan_path(), "w", encoding="utf-8") as f:
+        new_dir = _plan_dir()
+        old_dir = state.get("_plan_dir")
+        # 제목 변경으로 폴더명이 달라지면 새로 만들지 않고 기존 폴더를 리네임(고아 폴더 방지)
+        if old_dir and old_dir != new_dir and os.path.isdir(old_dir) and not os.path.exists(new_dir):
+            os.rename(old_dir, new_dir)
+        os.makedirs(new_dir, exist_ok=True)
+        state["_plan_dir"] = new_dir
+        with open(os.path.join(new_dir, "plan.json"), "w", encoding="utf-8") as f:
             json.dump(state["plan"], f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.warning(f"plan 저장 실패: {e}")

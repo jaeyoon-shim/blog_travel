@@ -1633,16 +1633,19 @@ class TripPlanner:
         for r in (receipts or []):
             store = (r or {}).get("store_name", "")
             rdate = (r or {}).get("date", "")
-            best, best_score = None, 0
+            best_score, candidates = 0, []
             for d in plan.get("days", []):
                 date_match = bool(rdate) and d.get("date") == rdate
                 for s in d.get("stops", []):
                     if ReceiptReader.crosscheck_name(store, s.get("name", "")):
                         score = 2 if date_match else 1
                         if score > best_score:
-                            best_score, best = score, s
-            if best is not None:
-                best["receipt"] = r
+                            best_score, candidates = score, [s]
+                        elif score == best_score:
+                            candidates.append(s)
+            # 동점(2곳 이상 동일 신뢰도)이면 추측하지 않고 미배정으로 남겨 사용자가 고르게 함
+            if best_score > 0 and len(candidates) == 1:
+                candidates[0]["receipt"] = r
             else:
                 unmatched.append(r)
         plan["unmatched_receipts"] = unmatched
@@ -1712,6 +1715,8 @@ class ReceiptReader:
         if not a or not b:
             return False
         short, long_ = sorted([a, b], key=len)
+        if len(short) < 2:  # 한 글자 부분일치는 우연 매칭 위험이 커 제외
+            return False
         return short in long_
 
     def read(self, image_path):

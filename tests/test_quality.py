@@ -339,6 +339,60 @@ def test_match_receipts_to_stops():
     assert sb3["receipt"]["amount"] == 600 and len(un2) == 1
 
 
+def test_match_receipts_to_stops_ambiguous_tie_stays_unmatched():
+    # 두 곳 모두 이름이 일치하고 날짜 정보 없음(동점) -> 추측하지 않고 미배정
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "카페 A점", True),
+        _pr("u/b.jpg", "2026:06:23 10:00:00", "카페 B점", True),
+    ]
+    plan = TripPlanner.build_draft(photos)
+    receipts = [{"store_name": "카페", "amount": 500, "currency": "JPY", "date": "", "image_path": "z"}]
+    plan2, un = TripPlanner.match_receipts_to_stops(plan, receipts)
+    assert all(s["receipt"] is None for d in plan2["days"] for s in d["stops"])
+    assert len(un) == 1
+
+
+def test_receipt_crosscheck_name_rejects_single_char():
+    # 한 글자 부분일치는 우연 매칭 위험 -> False
+    assert ReceiptReader.crosscheck_name("가", "가나다 식당") is False
+
+
+# ── 생성 파이프라인 스모크 테스트: AI 호출은 monkeypatch, 코드조립 불변식만 확인 ──
+def test_generate_drafts_smoke_no_network(monkeypatch):
+    import types, json as _json
+    photos = [
+        _pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True, 43.19, 140.99),
+        _pr("u/b.jpg", "2026:06:23 09:00:00", "삿포로 TV타워", True, 43.06, 141.35),
+    ]
+    g = TravelBlogGenerator(Config())
+    g.google_key = ""  # 경로 조회(_fetch_route_data)가 네트워크 없이 조기 반환하도록
+
+    def fake_create(**kwargs):
+        msgs = kwargs.get("messages", [])
+        sys_msg = msgs[0]["content"] if len(msgs) > 1 else ""
+        if sys_msg.startswith("정확한 지역 백과사전"):
+            content = _json.dumps({"intro": "홋카이도 소개", "specialties": [], "foods": [], "spots": []})
+        elif sys_msg.startswith("인기 여행 블로거"):
+            content = _json.dumps({"title": "홋카이도 여행기",
+                                    "content": "<h2>오타루</h2><p>운하가 아름다웠다.</p>"})
+        else:
+            content = "오타루 운하: 낭만적인 운하 산책로.\n삿포로 TV타워: 전망대에서 도심 조망."
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=content))])
+
+    monkeypatch.setattr(g.client.chat.completions, "create", fake_create)
+
+    group = {"photos": photos, "label": "전체", "course_line": ""}
+    drafts = g.generate_drafts(group, "전체", trip_title="홋카이도 여행",
+                                selected_structure="감성 후기형")
+    assert len(drafts) == 1
+    post = drafts[0]
+    assert post["title"] and post["content"]
+    assert "홋카이도 소개" in post["content"]  # 위키 박스가 코드로 최상단 삽입됐는지(핵심 설계 원칙)
+    assert "http://" not in post["content"] and "https://" not in post["content"]  # URL 미누출 불변식
+    assert post["style"] == "감성 후기형"
+
+
 # ── 같은 위치(GPS) 사진 묶기 ──
 def test_stops_group_by_gps_when_unnamed():
     # 이름 없는(name_confident=False) 두 사진이 같은 GPS → 한 stop
