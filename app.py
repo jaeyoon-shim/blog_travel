@@ -622,21 +622,26 @@ def api_seo():
 def api_style():
     data = request.json or {}
     urls = data.get("urls", [])
-    if not urls: return jsonify({"error":"URL 필요"}), 400
+    if not urls:
+        return jsonify({"error": "URL 필요"}), 400
     try:
-        sa = StyleAnalyzer()
+        sa = StyleAnalyzer(state.get("cfg"))
         results = [sa.analyze(u) for u in urls]
         if results:
             merged = dict(results[0])
-            all_p, all_e = [], []
+            all_end, all_ex, all_src = [], [], []
             for r in results:
-                all_p.extend(r.get("sample_paragraphs",[])); all_e.extend(r.get("common_endings",[]))
-            merged["sample_paragraphs"] = list(dict.fromkeys(all_p))[:10]
-            merged["common_endings"] = list(dict.fromkeys(all_e))[:10]
+                all_end.extend(r.get("ending_patterns", []))
+                all_ex.extend(r.get("examples", []))
+                all_src.extend(r.get("source_urls", []))
+            merged["ending_patterns"] = list(dict.fromkeys(all_end))[:6]
+            merged["examples"] = list(dict.fromkeys(all_ex))[:2]
+            merged["source_urls"] = list(dict.fromkeys(all_src))
             state["style_analysis"] = merged
-        return jsonify({"count":len(results),"results":results})
+        warning = next((r.get("warning") for r in results if r.get("warning")), None)
+        return jsonify({"count": len(results), "results": results, "warning": warning})
     except Exception as e:
-        return jsonify({"error":str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 def _apply_settings_to_generator():
