@@ -541,3 +541,15 @@ def test_extract_keywords_stopwords():
     assert "진짜" not in kws and "정말" not in kws  # 불용어 제외
     assert "그리고" not in kws and "오늘" not in kws
     assert len(kws) <= 15
+
+
+def test_extract_core_tags():
+    analysis = {"common_keywords": ["라멘", "맛집", "온천", "야경", "카페"]}
+    tags = TravelBlogGenerator.extract_core_tags(analysis, "후쿠오카")
+    assert "후쿠오카" in tags and "후쿠오카여행" in tags
+    assert "후쿠오카맛집" in tags            # 맛집 신호 있음 → 조합 태그
+    assert 3 <= len(tags) <= 5
+    # analysis 없음 → region 최소 태그
+    assert TravelBlogGenerator.extract_core_tags(None, "삿포로") == ["삿포로", "삿포로여행"]
+    # 둘 다 없음 → 빈 리스트 (조용히 생략)
+    assert TravelBlogGenerator.extract_core_tags(None, "") == []

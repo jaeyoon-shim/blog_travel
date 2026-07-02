@@ -3182,6 +3182,25 @@ class TravelBlogGenerator:
             logger.debug(f"네이버 블로그 검색 실패: {e}")
             return ""
 
+    @staticmethod
+    def extract_core_tags(analysis, region):
+        """실측 데이터(상위 블로그 빈도 키워드)+확정 지역명으로 핵심 태그 3~5개.
+        LLM 없음(결정적). analysis/region 없으면 축소·빈 리스트(조용히 생략)."""
+        region = (region or "").strip()
+        tags = []
+        if region:
+            tags.append(region)
+            tags.append(f"{region}여행")
+        kws = (analysis or {}).get("common_keywords") or []
+        if region and any("맛집" in k for k in kws):
+            tags.append(f"{region}맛집")
+        for k in kws:
+            if len(tags) >= 5:
+                break
+            if k and k not in tags:
+                tags.append(k)
+        return tags[:5]
+
     def _naver_context(self, na):
         if not na or not na.get("top_titles"): return ""
 
