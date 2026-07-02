@@ -1960,6 +1960,9 @@ class TravelBlogGenerator:
                 post["course_line"] = course_line
                 post["group_label"] = group_label
                 post["photo_results"] = photos
+                # SEO 강제·검증 (E): 핵심 태그 병합 + 경고 부착
+                post["tags"] = self.merge_tags(post.get("tags"), self.extract_core_tags(naver_analysis, region))
+                post["seo_warnings"] = self.seo_check(post, naver_analysis, region)
                 drafts.append(post)
             time.sleep(1)
 
