@@ -61,3 +61,15 @@
 8. **검수 화면 편의기능 배치(2026-07-01)**: 썸네일은 `/api/photos`에 `pid` 추가해 stop.photo_ids와 매칭(썸네일·힌트·지도). 같은 위치 무명 사진은 `_stops_for_day`에서 **GPS 반올림(~110m) 클러스터**로 묶음. **지도는 검수 UI에만**(OSM iframe + 구글맵 링크, 키 불필요) — **발행 HTML엔 절대 미포함**(불변식). 편집 자동저장은 `#planRoot`에 delegated `input` 리스너 + 디바운스 savePlan. 테마는 `:root` 변수라 팔레트만 바꾸면 전역 반영(상아색+연두). 전체발행은 `/api/publish_all`(그룹별 blocks 수집) — 되돌리기 어려우니 `confirm()` 필수.
 
 9. **자가 QA(2026-07-01) — 프론트 "조용한 실패" 3종**: (a) **미선언 전역 참조**: `renderS4`가 백엔드 전역명 `state`(`state?.group_states`)를 참조 → ReferenceError로 **편집화면 전체가 안 그려짐**(생성 후 편집 불가, 치명적). 프론트/백엔드 전역명 겹침 주의. (b) **폴링 콜백이 error 미처리**: `doGen`/`doGenAll`의 `startPoll`이 `done`만 처리 → 생성 실패해도 조용히 사라져 "생성 안 됨"으로 보임. `status==='error'`·빈 초안 시 alert. (c) **`/api/profiles/<name>`가 함수 인자 `n`**(→`name`) 500 + `goSettings`가 설정(0) 아닌 프로필선택(-1)로 감. **교훈**: 인라인 `<script>`는 구문 OK여도 **런타임 미선언 참조/에러 무처리로 조용히 죽음** → `/browse`로 각 스텝 실제 렌더 + 실제 생성(E2E)까지 확인. 생성 파이프라인은 `init_engine()` 후 실제 OpenAI로 검증(초안·사진삽입·`<p>¥2,000</p>` 코드조립·URL 미누출 확인).
+
+---
+
+## 2026-07-02 — B(문체 따라하기) 구현 + 매니지먼트 관찰
+
+1. **`.gitignore`의 앵커 없는 `plans/`가 `docs/superpowers/plans/`를 삼킴**: 루트 런타임 산출물(`plans/<title>/plan.json`)용 규칙 `plans/`가 앵커가 없어 CLAUDE.md가 커밋하라고 지시한 `docs/superpowers/plans/`까지 무시했다(specs는 무사, plans만 막힘). → `/plans/`로 루트 앵커링해 해결. **교훈**: gitignore 규칙은 의도 범위에 맞게 `/` 앵커링. `git check-ignore <path>`로 오탐 확인.
+
+2. **문체 주입 = "규칙+예시", 원문 통째 금지(표절 불변식)**: `_style_context`는 LLM이 뽑은 규칙 JSON + **예시 문장 1~2개 상한**만 프롬프트에 넣는다. 원문 문단 통째 주입은 표절/복붙 위험이라 폐기. 회귀 테스트가 "긴 원문 문단이 조각에 안 실림"을 assert. 무료모드는 정규식 폴백(`extracted_by="regex_fallback"`), 폴백 어미는 여전히 파편기라 최소보장용.
+
+3. **모델 라우팅 첫 적용(subagent-driven)**: 구현 subagent=sonnet, per-task 리뷰·최종 전체리뷰=메인루프(최고모델) 직접. 작고 완전히 테스트된 태스크는 리뷰어 subagent 남발 대신 컨트롤러가 diff 직접 검증(토큰 절감). **subagent는 부모 모델 상속 안 함 → Agent 호출마다 `model` 명시 필수.**
+
+4. **subagent 세션 한도 중도 사망 대비**: 구현 subagent가 세션 한도로 커밋 전에 죽을 수 있다(Task5에서 발생 — 파일 편집은 됐으나 미커밋). **교훈**: subagent 보고를 믿지 말고 `git status`/`git show`로 실제 반영·커밋 여부 확인. 작은 배선은 컨트롤러가 이어받아 검증·커밋.
