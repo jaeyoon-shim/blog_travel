@@ -70,6 +70,9 @@ class Config:
 class StyleAnalyzer:
     """참고 블로그 URL의 문체, 구조, 톤을 분석"""
 
+    def __init__(self, config=None):
+        self.config = config
+
     def analyze(self, url):
         logger.info(f"📎 참고 블로그 분석: {url}")
         try:
@@ -150,6 +153,31 @@ class StyleAnalyzer:
                 freq[k] = freq.get(k, 0) + 1
         sorted_endings = sorted(freq.items(), key=lambda x: x[1], reverse=True)
         return [e[0] for e in sorted_endings[:5]] if sorted_endings else ["~했어요.", "~더라고요."]
+
+    def extract_profile(self, text, headings=None):
+        """원문 텍스트 → 문체 규칙 프로파일(dict).
+        config가 유효하면 LLM 추출, 아니면 정규식 폴백."""
+        cfg = self.config
+        if cfg is not None and hasattr(cfg, "is_valid") and cfg.is_valid():
+            prof = self._extract_profile_llm(text)
+            if prof:
+                return prof
+        return self._profile_from_regex(text)
+
+    def _profile_from_regex(self, text):
+        """LLM 없이 기존 정규식 휴리스틱으로 최소 프로파일 구성."""
+        return {
+            "tone": self._detect_tone(text),
+            "sentence_length": "",
+            "ending_patterns": self._detect_endings(text),
+            "emoji_usage": "",
+            "rhetorical_habits": [],
+            "person": "",
+            "dos": [], "donts": [],
+            "examples": [],
+            "extracted_by": "regex_fallback",
+            "warning": None,
+        }
 
     def _empty(self, url):
         return {"url":url,"title":"","headings":[],"sample_paragraphs":[],"tone":"친근 구어체",

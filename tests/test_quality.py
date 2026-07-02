@@ -3,7 +3,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator, TripPlanner, ReceiptReader
+from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator, TripPlanner, ReceiptReader, StyleAnalyzer
 from posters import NaverSeleniumPoster
 
 
@@ -481,3 +481,13 @@ def test_style_context_empty():
     assert _style_ctx(None) == ""
     assert _style_ctx({}) == ""
     assert _style_ctx({"tone": ""}) == ""
+
+
+# ── Task 2: StyleAnalyzer 정규식 폴백 프로파일 ──
+def test_extract_profile_regex_fallback():
+    sa = StyleAnalyzer(None)  # config 없음 → 정규식 폴백
+    p = sa.extract_profile("첫날은 살살 돌았어요. 라멘이 진짜 맛있더라고요. 웨이팅 있었어요.")
+    assert p["extracted_by"] == "regex_fallback"
+    assert p["tone"]                       # 톤이 채워짐
+    assert isinstance(p["ending_patterns"], list)
+    assert isinstance(p["examples"], list)
