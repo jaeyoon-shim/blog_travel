@@ -520,3 +520,13 @@ def test_extract_profile_uses_llm_when_valid(monkeypatch):
     p = sa.extract_profile("아무 긴 텍스트 " * 10)
     assert p is fixture
     assert p["extracted_by"] == "llm"
+
+
+def test_thin_text_warning(monkeypatch):
+    sa = StyleAnalyzer(None)  # 정규식 폴백(네트워크 없음)
+    monkeypatch.setattr(sa, "_scrape", lambda url: {
+        "title": "t", "headings": [], "paragraphs": ["아주 짧은 글"], "image_count": 0})
+    p = sa.analyze("http://example.com")
+    assert p["warning"]                    # 200자 미만 → 경고 세팅
+    assert p["source_urls"] == ["http://example.com"]
+    assert p["extracted_by"] == "regex_fallback"

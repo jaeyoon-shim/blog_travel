@@ -75,59 +75,50 @@ class StyleAnalyzer:
 
     def analyze(self, url):
         logger.info(f"📎 참고 블로그 분석: {url}")
+        scraped = self._scrape(url)
+        text = " ".join(scraped.get("paragraphs", []))
+        profile = self.extract_profile(text, scraped.get("headings"))
+        profile["source_urls"] = [url]
+        profile["title"] = scraped.get("title", "")
+        if len(text) < 200:
+            profile["warning"] = "본문을 충분히 못 읽었습니다 — 문체 반영이 약할 수 있어요."
+        logger.info(f"✅ 문체 분석 완료: {profile.get('tone','')} ({profile.get('extracted_by')})")
+        return profile
+
+    def _scrape(self, url):
+        """URL에서 원문 문단/제목/이미지수 수집. 실패 시 빈 구조."""
+        empty = {"title": "", "headings": [], "paragraphs": [], "image_count": 0}
         try:
             from bs4 import BeautifulSoup
         except ImportError:
             logger.warning("⚠️  pip install beautifulsoup4 필요")
-            return self._empty(url)
+            return empty
         try:
             req = urllib.request.Request(url, headers={
-                "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"})
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"})
             with urllib.request.urlopen(req, timeout=15) as r:
                 html = r.read().decode('utf-8', errors='ignore')
             soup = BeautifulSoup(html, 'html.parser')
-
             title = soup.find('title').get_text(strip=True) if soup.find('title') else ""
-
-            # 소제목 구조 추출
             headings = []
-            for tag in ['h2','h3','strong','b']:
+            for tag in ['h2', 'h3', 'strong', 'b']:
                 for h in soup.find_all(tag):
-                    text = h.get_text(strip=True)
-                    if text and 5 < len(text) < 80:
-                        headings.append(text)
+                    t = h.get_text(strip=True)
+                    if t and 5 < len(t) < 80:
+                        headings.append(t)
             headings = headings[:15]
-
-            # 본문 문단 추출
             paras = []
-            for p in soup.find_all(['p','div','span']):
-                text = p.get_text(strip=True)
-                if 30 < len(text) < 500:
-                    paras.append(text)
-            paras = list(dict.fromkeys(paras))[:20]  # 중복 제거
-
-            # 문체 분석
-            sample = ' '.join(paras[:10])
-            tone = self._detect_tone(sample)
-            endings = self._detect_endings(sample)
-            img_count = len([i for i in soup.find_all('img') if i.get('src','').startswith('http')])
-
-            result = {
-                "url": url, "title": title,
-                "headings": headings,
-                "sample_paragraphs": paras[:5],
-                "tone": tone,
-                "common_endings": endings,
-                "heading_count": len(headings),
-                "paragraph_count": len(paras),
-                "image_count": img_count,
-                "structure_summary": f"소제목 {len(headings)}개, 문단 {len(paras)}개, 이미지 {img_count}개"
-            }
-            logger.info(f"✅ 문체 분석 완료: {tone}, {result['structure_summary']}")
-            return result
+            for p in soup.find_all(['p', 'div', 'span']):
+                t = p.get_text(strip=True)
+                if 30 < len(t) < 500:
+                    paras.append(t)
+            paras = list(dict.fromkeys(paras))[:20]
+            img_count = len([i for i in soup.find_all('img') if i.get('src', '').startswith('http')])
+            return {"title": title, "headings": headings,
+                    "paragraphs": paras, "image_count": img_count}
         except Exception as e:
             logger.warning(f"⚠️  분석 실패: {e}")
-            return self._empty(url)
+            return empty
 
     def _detect_tone(self, text):
         if not text: return "일반"
