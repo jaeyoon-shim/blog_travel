@@ -742,6 +742,7 @@ for(let i=0;i<groups.length;i++){
 h+=`</div>`;
 // 초안 선택
 if(drafts.length>1){h+=`<div class="flex gap-6 mb-8">`+drafts.map((d,i)=>`<button class="btn ${i===curDraft?'btn-pri':'btn-ghost'} btn-sm" onclick="loadBlocks(${i})">초안${i+1}</button>`).join('')+`</div>`}
+const sw=(drafts[curDraft]||{}).seo_warnings||[];if(sw.length){h+=`<div class="card" style="background:#FDF3E7;border-color:#EED9B8"><div class="card-label">⚠️ SEO 점검</div>${sw.map(x=>`<div class="text-xs" style="color:#8A6D1F;margin:2px 0">· ${esc(x)}</div>`).join('')}</div>`}
 h+=`<div class="card"><div class="card-label">제목</div><input type="text" id="bTitle" value="${esc(draftTitle)}" oninput="draftTitle=this.value;updatePreview()"></div>`;
 h+=`<div class="flex gap-6 mb-8"><button class="btn btn-ghost btn-sm" onclick="addBlk('text')">+ 텍스트</button><button class="btn btn-ghost btn-sm" onclick="addBlk('separator')">+ 구분선</button></div>`;
 h+='<div id="bList">';
