@@ -3266,7 +3266,7 @@ class TravelBlogGenerator:
                 parts.append(f"  동영상: {avg['avg_videos']}개")
             mr = avg.get("map_ratio", 0)
             if mr >= 0.3:
-                parts.append(f"  지도: {mr*100:.0f}% 포함 → 지도 삽입 필수")
+                parts.append(f"  지도: 상위 글 {mr*100:.0f}%가 포함 — 지도·경로는 코드가 자동 삽입하니 본문에 절대 넣지 마세요")
 
         # 공통 섹션 순서
         if avg and avg.get("common_sections"):

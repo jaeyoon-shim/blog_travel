@@ -587,3 +587,13 @@ def test_seo_check_warnings():
     assert TravelBlogGenerator.seo_check(good, analysis, "후쿠오카") == []
     # analysis 없음 → 빈 리스트 (검증 스킵)
     assert TravelBlogGenerator.seo_check(post, None, "후쿠오카") == []
+
+
+def test_naver_context_no_map_directive():
+    na = {"keyword": "후쿠오카 여행", "top_titles": ["t1"], "common_keywords": ["라멘"],
+          "avg_analysis": {"avg_chars": 4000, "avg_images": 15, "avg_videos": 0,
+                           "map_ratio": 0.8, "common_sections": []}}
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    ctx = TravelBlogGenerator._naver_context(g, na)
+    assert "지도 삽입 필수" not in ctx           # 불변식 충돌 문구 제거됨
+    assert "넣지" in ctx                          # "본문에 절대 넣지 말 것" 안내로 대체
