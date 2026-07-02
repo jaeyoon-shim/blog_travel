@@ -3133,10 +3133,34 @@ class TravelBlogGenerator:
 
         return "\n".join(parts) + "\n"
 
-    def _style_context(self, sa):
-        if not sa or not sa.get("tone"): return ""
-        sample = "\n  ".join(sa.get("sample_paragraphs",[])[:3])
-        return f"\n[참고 문체]\n톤: {sa.get('tone','')} | 패턴: {', '.join(sa.get('common_endings',[]))}\n샘플: {sample}\n"
+    def _style_context(self, profile):
+        """문체 프로파일(dict) → 프롬프트 조각. 순수함수, 네트워크 없음.
+        규칙 + 짧은 예시만 넣고 원문 문단은 넣지 않는다(표절 방지)."""
+        if not profile or not isinstance(profile, dict):
+            return ""
+        tone = (profile.get("tone") or "").strip()
+        if not tone:
+            return ""
+        lines = ["\n[참고 문체 — 아래 규칙을 모방하되 문장을 그대로 베끼지 말 것]"]
+        person = (profile.get("person") or "").strip()
+        lines.append(f"· 톤: {tone}" + (f" / {person}" if person else ""))
+        if profile.get("sentence_length"):
+            lines.append(f"· 리듬: {profile['sentence_length']}")
+        endings = [e for e in (profile.get("ending_patterns") or []) if e][:5]
+        if endings:
+            lines.append("· 어미: " + " / ".join(endings))
+        if profile.get("emoji_usage"):
+            lines.append(f"· 이모지: {profile['emoji_usage']}")
+        habits = [h for h in (profile.get("rhetorical_habits") or []) if h][:5]
+        if habits:
+            lines.append("· 습관: " + ", ".join(habits))
+        donts = [d for d in (profile.get("donts") or []) if d][:3]
+        if donts:
+            lines.append("· 피할 것: " + ", ".join(donts))
+        examples = [e for e in (profile.get("examples") or []) if e][:2]
+        if examples:
+            lines.append("· 참고 어감(복붙 금지): " + " / ".join(f'"{e}"' for e in examples))
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _is_same_text(a, b):

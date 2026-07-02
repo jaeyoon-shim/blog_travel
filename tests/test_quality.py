@@ -446,3 +446,38 @@ def test_merge_user_edits():
     # 편집 없던 Day2는 그대로
     st1 = new["days"][1]["stops"][0]
     assert st1["name"] == "삿포로 TV타워" and st1["rating"] is None
+
+
+# ── Task 1: 문체 프로파일 → 프롬프트 조각 ──
+def _style_ctx(profile):
+    # _style_context는 self를 쓰지 않는 순수 로직 → 언바운드 호출로 테스트
+    return TravelBlogGenerator._style_context(TravelBlogGenerator.__new__(TravelBlogGenerator), profile)
+
+
+def test_style_context_from_profile():
+    profile = {
+        "tone": "친근 구어체",
+        "person": "1인칭 혼잣말체",
+        "sentence_length": "짧고 끊어치는 리듬",
+        "ending_patterns": ["~더라고요", "~었어요"],
+        "emoji_usage": "ㅎㅎ 가볍게 문단당 1회",
+        "rhetorical_habits": ["'근데'로 화제 전환"],
+        "donts": ["격식체 금지"],
+        "examples": ["아 이거지 싶더라고요", "기다린 보람 있었어요!"],
+        # 표절 방지 회귀용: 원문 문단은 절대 조각에 실리면 안 됨
+        "sample_paragraphs": ["이것은매우긴원문문단으로절대프롬프트에통째로들어가면안되는내용ABCDEF"],
+    }
+    ctx = _style_ctx(profile)
+    assert "친근 구어체" in ctx
+    assert "~더라고요" in ctx
+    assert "아 이거지 싶더라고요" in ctx
+    # 원문 문단 통째 주입 금지(표절 방지)
+    assert "절대프롬프트에통째로들어가면안되는내용ABCDEF" not in ctx
+    # 예시는 최대 2개
+    assert ctx.count('"') == 4
+
+
+def test_style_context_empty():
+    assert _style_ctx(None) == ""
+    assert _style_ctx({}) == ""
+    assert _style_ctx({"tone": ""}) == ""
