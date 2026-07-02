@@ -237,7 +237,7 @@ class NaverBlogAnalyzer:
     def __init__(self, config=None):
         self.config = config
 
-    def analyze(self, keyword, count=5):
+    def analyze(self, keyword, count=10):
         """상위 블로그 검색 → 본문 방문 → 구조 분석"""
         logger.info(f"🔍 네이버 상위 블로그 구조 분석: '{keyword}'")
 
@@ -250,9 +250,9 @@ class NaverBlogAnalyzer:
         titles = [b["title"] for b in blog_items]
         descs = [b.get("desc", "") for b in blog_items]
 
-        # 2단계: 상위 블로그 본문 구조 분석 (최대 3개)
+        # 2단계: 상위 블로그 본문 구조 분석 (최대 count개)
         blog_structures = []
-        for item in blog_items[:3]:
+        for item in blog_items[:count]:
             url = item.get("link", "")
             if url:
                 struct = self._analyze_blog_page(url)
@@ -266,14 +266,8 @@ class NaverBlogAnalyzer:
         # 3단계: 종합 분석
         avg_analysis = self._aggregate_structures(blog_structures)
 
-        # 키워드 분석
-        all_text = ' '.join(titles + descs)
-        words = re.findall(r'[가-힣a-zA-Z]{2,}', all_text)
-        freq = {}
-        for w in words:
-            if w != keyword and w not in keyword and len(w) >= 2:
-                freq[w] = freq.get(w, 0) + 1
-        common = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:15]
+        # 키워드 분석 (불용어·검색어 자신 제외)
+        common = self._extract_keywords(titles, descs, keyword)
 
         patterns = self._detect_patterns(titles)
 
@@ -281,7 +275,7 @@ class NaverBlogAnalyzer:
             "keyword": keyword,
             "top_titles": titles,
             "top_descriptions": descs,
-            "common_keywords": [w[0] for w in common],
+            "common_keywords": common,
             "title_patterns": patterns,
             "recommended_structure": avg_analysis.get("recommended_sections", []),
             "avg_title_length": round(sum(len(t) for t in titles) / len(titles)) if titles else 30,
@@ -292,6 +286,33 @@ class NaverBlogAnalyzer:
         }
         logger.info(f"✅ 블로그 구조 분석 완료: {len(blog_structures)}개 본문 분석")
         return result
+
+    # 키워드 추출에서 걸러낼 일반어(여행 후기 상투어·부사·접속사)
+    KEYWORD_STOPWORDS = {
+        "있는", "있어요", "있었어요", "했어요", "하는", "합니다", "해서", "하고",
+        "그리고", "그래서", "하지만", "진짜", "정말", "완전", "너무", "조금",
+        "바로", "여기", "저희", "제가", "가장", "후기", "블로그", "오늘",
+        "다녀왔어요", "다녀온", "갔다왔어요", "같아요", "있습니다", "추천",
+    }
+
+    @staticmethod
+    def _extract_keywords(titles, descs, keyword, top_n=15):
+        """제목+요약에서 연관 키워드 빈도 추출. 불용어·검색어 자신 제외. 순수함수."""
+        all_text = ' '.join(list(titles) + list(descs))
+        words = re.findall(r'[가-힣a-zA-Z]{2,}', all_text)
+        stop = NaverBlogAnalyzer.KEYWORD_STOPWORDS
+        freq = {}
+        for w in words:
+            if w in stop:
+                continue
+            if w == keyword or w in keyword or keyword in w:
+                continue
+            # 검색 키워드의 각 어절(예: "후쿠오카", "여행")과 겹치면 제외
+            if any(w == part or w in part or part in w for part in keyword.split()):
+                continue
+            freq[w] = freq.get(w, 0) + 1
+        ranked = sorted(freq.items(), key=lambda x: x[1], reverse=True)
+        return [w for w, _ in ranked[:top_n]]
 
     # ─── 블로그 검색 ───
     def _search_blogs(self, keyword, count):

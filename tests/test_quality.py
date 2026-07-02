@@ -3,7 +3,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator, TripPlanner, ReceiptReader, StyleAnalyzer
+from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator, TripPlanner, ReceiptReader, StyleAnalyzer, NaverBlogAnalyzer
 from posters import NaverSeleniumPoster
 
 
@@ -530,3 +530,14 @@ def test_thin_text_warning(monkeypatch):
     assert p["warning"]                    # 200자 미만 → 경고 세팅
     assert p["source_urls"] == ["http://example.com"]
     assert p["extracted_by"] == "regex_fallback"
+
+
+def test_extract_keywords_stopwords():
+    titles = ["후쿠오카 여행 갔다왔어요 진짜 좋았어요", "후쿠오카 맛집 라멘 후기 정말 추천"]
+    descs = ["오늘 다녀온 후쿠오카 텐진 맛집 그리고 라멘"]
+    kws = NaverBlogAnalyzer._extract_keywords(titles, descs, "후쿠오카 여행")
+    assert "라멘" in kws and "맛집" in kws        # 실질 키워드는 살아남음
+    assert "후쿠오카" not in kws                   # 검색 키워드 자신(부분 포함) 제외
+    assert "진짜" not in kws and "정말" not in kws  # 불용어 제외
+    assert "그리고" not in kws and "오늘" not in kws
+    assert len(kws) <= 15
