@@ -764,7 +764,8 @@ def api_drafts(gi):
     gs = state["group_states"].get(gi,{})
     return jsonify([{"title":d.get("title",""),"content":d.get("content",""),
         "tags":d.get("tags",[]),"meta_description":d.get("meta_description",""),
-        "hashtags":d.get("hashtags",[])} for d in gs.get("drafts",[])])
+        "hashtags":d.get("hashtags",[]),
+        "seo_warnings":d.get("seo_warnings",[])} for d in gs.get("drafts",[])])
 
 
 @app.route('/api/blocks/<int:gi>/<int:di>')
