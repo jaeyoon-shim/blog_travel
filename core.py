@@ -3221,6 +3221,34 @@ class TravelBlogGenerator:
                 break
         return merged
 
+    @staticmethod
+    def seo_check(post, analysis, region=""):
+        """생성 결과 SEO 검증 → 경고 문자열 목록(발행은 막지 않음).
+        analysis 없으면 빈 리스트(검증 스킵). 순수함수."""
+        if not analysis or not isinstance(analysis, dict):
+            return []
+        warns = []
+        region = (region or "").strip()
+        title = (post or {}).get("title", "") or ""
+        kws = analysis.get("common_keywords") or []
+        # 1) 제목에 핵심 키워드(지역명 또는 빈도 1위) 포함 여부
+        head_kw = region or (kws[0] if kws else "")
+        if head_kw and head_kw not in title:
+            warns.append(f"제목에 핵심 키워드 '{head_kw}' 미포함")
+        # 2) 본문 분량: 상위 평균의 60% 미만이면 경고
+        avg_chars = (analysis.get("avg_analysis") or {}).get("avg_chars") or 0
+        if avg_chars > 0:
+            body = re.sub(r'<[^>]+>', '', (post or {}).get("content", "") or "")
+            n = len(body.replace("\n", "").replace(" ", ""))
+            if n < avg_chars * 0.6:
+                warns.append(f"분량 {n:,}자 — 상위 평균({avg_chars:,}자)의 {n*100//avg_chars}%")
+        # 3) 태그에 지역명 포함 여부
+        if region:
+            tags = (post or {}).get("tags") or []
+            if not any(region in str(t) for t in tags):
+                warns.append(f"태그에 지역명 '{region}' 부재")
+        return warns
+
     def _naver_context(self, na):
         if not na or not na.get("top_titles"): return ""
 

@@ -566,3 +566,24 @@ def test_merge_tags():
     # 빈 입력 안전
     assert TravelBlogGenerator.merge_tags(None, []) == []
     assert TravelBlogGenerator.merge_tags(["a"], None) == ["a"]
+
+
+def test_seo_check_warnings():
+    analysis = {"common_keywords": ["라멘", "맛집"],
+                "avg_analysis": {"avg_chars": 4000}}
+    # 문제 3종: 제목에 지역명 없음 / 분량 60% 미만 / 태그에 지역명 없음
+    post = {"title": "겨울 바다와 라멘 한 그릇",
+            "content": "<p>" + ("가나다라마바사아" * 100) + "</p>",   # 800자 = 4000의 20%
+            "tags": ["라멘", "야경"]}
+    warns = TravelBlogGenerator.seo_check(post, analysis, "후쿠오카")
+    assert len(warns) == 3
+    assert any("제목" in w for w in warns)
+    assert any("분량" in w for w in warns)
+    assert any("태그" in w for w in warns)
+    # 문제 없음 → 빈 리스트
+    good = {"title": "후쿠오카 여행 라멘 총정리",
+            "content": "<p>" + ("가나다라마바사아" * 500) + "</p>",   # 4000자
+            "tags": ["후쿠오카", "라멘"]}
+    assert TravelBlogGenerator.seo_check(good, analysis, "후쿠오카") == []
+    # analysis 없음 → 빈 리스트 (검증 스킵)
+    assert TravelBlogGenerator.seo_check(post, None, "후쿠오카") == []
