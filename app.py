@@ -14,7 +14,7 @@ from flask_cors import CORS
 
 from core import (Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator,
                   LocalSaver, NaverBlogAnalyzer, StyleAnalyzer, logger)
-from posters import NaverPoster, TistoryPoster, html_to_blocks
+from posters import NaverPoster, TistoryPoster, html_to_blocks, summarize_publish_results
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
@@ -800,6 +800,7 @@ def api_publish():
 
     def task():
         state["progress"] = {"status":"publishing","message":"발행 준비 중...","percent":0}
+        poster = None
         try:
             content_html = blocks_to_html(blocks)
             post_data = {"title":title,"content":content_html,"tags":tags,
@@ -815,6 +816,13 @@ def api_publish():
                     "message":f"❌ {result.get('reason','알 수 없는 오류')}","percent":0}
         except Exception as e:
             state["progress"] = {"status":"error","message":f"❌ {e}","percent":0}
+        finally:
+            # 브라우저를 닫아 selenium_profile 잠금 해제 — 안 닫으면 다음 발행이
+            # "session not created: Chrome instance exited"로 전부 실패한다.
+            # 로그인 세션은 프로필에 저장되므로 재로그인 불필요.
+            if poster:
+                try: poster.close()
+                except: pass
     threading.Thread(target=task, daemon=True).start()
     return jsonify({"started":True})
 
@@ -830,8 +838,10 @@ def api_publish_all():
     if not total: return jsonify({"error":"데이터 없음"}), 400
     def task():
         state["progress"] = {"status":"publishing","message":f"전체 {total}개 발행 중...","percent":0}
+        poster = None
         try:
             poster = NaverPoster(state["cfg"])
+            results, titles = [], []
             for i, gd in enumerate(group_data):
                 state["progress"]["message"] = f"[{i+1}/{total}] 발행 중..."
                 state["progress"]["percent"] = int((i/total)*100)
@@ -839,11 +849,20 @@ def api_publish_all():
                 post_data = {"title":gd.get("title",""),"content":content_html,
                              "tags":gd.get("tags",[]),"blocks":gd.get("blocks",[]),
                              "visibility":visibility}
-                poster.post(post_data, method=method, visibility=visibility)
+                r = poster.post(post_data, method=method, visibility=visibility)
+                results.append(r); titles.append(gd.get("title","") or f"#{i+1}")
                 time.sleep(5)  # 스팸 방지
-            state["progress"] = {"status":"done","message":f"✅ {total}개 발행 완료!","percent":100}
+            # 실패를 무시하고 "완료"로 보고하던 버그 수정 — 결과 기반 요약
+            status, msg = summarize_publish_results(results, titles)
+            state["progress"] = {"status":status,"message":msg,
+                                 "percent":100 if status=="done" else 0}
         except Exception as e:
             state["progress"] = {"status":"error","message":f"❌ {e}","percent":0}
+        finally:
+            # 브라우저 닫아 selenium_profile 잠금 해제 (단건 발행과 동일 이유)
+            if poster:
+                try: poster.close()
+                except: pass
     threading.Thread(target=task, daemon=True).start()
     return jsonify({"started":True})
 

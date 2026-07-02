@@ -423,6 +423,24 @@ def _find_chrome_profile():
     return ""
 
 
+def summarize_publish_results(results, titles):
+    """발행 결과 목록 → (status, message). 순수함수.
+    실패가 하나라도 있으면 status='error'로 노출한다(허위 '완료' 보고 금지)."""
+    total = len(results)
+    if total == 0:
+        return "error", "❌ 발행할 데이터가 없습니다"
+    fails = []
+    for i, r in enumerate(results):
+        if not (r or {}).get("success"):
+            t = titles[i] if i < len(titles) else f"#{i+1}"
+            fails.append((t, (r or {}).get("reason", "알 수 없는 오류")))
+    if not fails:
+        return "done", f"✅ {total}개 발행 완료!"
+    ok = total - len(fails)
+    detail = " / ".join(f"'{t}': {reason}" for t, reason in fails[:3])
+    return "error", f"❌ 발행 실패 {len(fails)}개 · 성공 {ok}개 — {detail}"
+
+
 # ============================================================
 # 방법 1: 클립보드 + 브라우저 자동 오픈 (안전)
 # ============================================================

@@ -4,7 +4,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator, TripPlanner, ReceiptReader, StyleAnalyzer, NaverBlogAnalyzer
-from posters import NaverSeleniumPoster
+from posters import NaverSeleniumPoster, summarize_publish_results
 
 
 def _pa():
@@ -597,3 +597,20 @@ def test_naver_context_no_map_directive():
     ctx = TravelBlogGenerator._naver_context(g, na)
     assert "지도 삽입 필수" not in ctx           # 불변식 충돌 문구 제거됨
     assert "넣지" in ctx                          # "본문에 절대 넣지 말 것" 안내로 대체
+
+
+def test_summarize_publish_results():
+    ok = {"success": True, "url": "http://blog.naver.com/x/1"}
+    fail = {"success": False, "reason": "session not created: Chrome instance exited"}
+    # 전부 성공 → done
+    s, msg = summarize_publish_results([ok, ok], ["글1", "글2"])
+    assert s == "done" and "2" in msg
+    # 일부 실패 → error + 실패 글 제목·사유 노출 (허위 "완료" 금지)
+    s, msg = summarize_publish_results([ok, fail], ["글1", "글2"])
+    assert s == "error" and "글2" in msg and "session not created" in msg
+    # 전부 실패 → error
+    s, msg = summarize_publish_results([fail], ["글1"])
+    assert s == "error"
+    # 빈 입력 안전
+    s, msg = summarize_publish_results([], [])
+    assert s == "error"
