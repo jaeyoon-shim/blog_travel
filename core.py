@@ -3201,6 +3201,26 @@ class TravelBlogGenerator:
                 tags.append(k)
         return tags[:5]
 
+    @staticmethod
+    def merge_tags(ai_tags, core_tags, cap=10):
+        """핵심 태그(코드 추출)를 앞에 보장하고 AI 태그로 채움.
+        공백/# 무시 정규화로 중복 제거, 상한 cap."""
+        def norm(t):
+            return re.sub(r'[\s#]', '', str(t)).lower()
+        merged, seen = [], set()
+        for t in list(core_tags or []) + list(ai_tags or []):
+            t = str(t).strip()
+            if not t:
+                continue
+            k = norm(t)
+            if not k or k in seen:
+                continue
+            seen.add(k)
+            merged.append(t)
+            if len(merged) >= cap:
+                break
+        return merged
+
     def _naver_context(self, na):
         if not na or not na.get("top_titles"): return ""
 

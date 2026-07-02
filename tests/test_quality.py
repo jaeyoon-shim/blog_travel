@@ -553,3 +553,16 @@ def test_extract_core_tags():
     assert TravelBlogGenerator.extract_core_tags(None, "삿포로") == ["삿포로", "삿포로여행"]
     # 둘 다 없음 → 빈 리스트 (조용히 생략)
     assert TravelBlogGenerator.extract_core_tags(None, "") == []
+
+
+def test_merge_tags():
+    core = ["후쿠오카", "후쿠오카여행", "라멘"]
+    ai = ["# 후쿠오카", "야타이", "텐진", "라멘 ", "야경", "온천", "신사", "공원", "카페", "쇼핑"]
+    merged = TravelBlogGenerator.merge_tags(ai, core)
+    assert merged[:3] == core                       # 핵심 태그 우선 배치
+    assert len(merged) <= 10                        # 상한
+    norm = [t.replace(" ", "").replace("#", "") for t in merged]
+    assert len(norm) == len(set(norm))              # 정규화 기준 중복 없음("# 후쿠오카"/"라멘 " 제거됨)
+    # 빈 입력 안전
+    assert TravelBlogGenerator.merge_tags(None, []) == []
+    assert TravelBlogGenerator.merge_tags(["a"], None) == ["a"]
