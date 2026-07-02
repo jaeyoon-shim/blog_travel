@@ -73,3 +73,9 @@
 3. **모델 라우팅 첫 적용(subagent-driven)**: 구현 subagent=sonnet, per-task 리뷰·최종 전체리뷰=메인루프(최고모델) 직접. 작고 완전히 테스트된 태스크는 리뷰어 subagent 남발 대신 컨트롤러가 diff 직접 검증(토큰 절감). **subagent는 부모 모델 상속 안 함 → Agent 호출마다 `model` 명시 필수.**
 
 4. **subagent 세션 한도 중도 사망 대비**: 구현 subagent가 세션 한도로 커밋 전에 죽을 수 있다(Task5에서 발생 — 파일 편집은 됐으나 미커밋). **교훈**: subagent 보고를 믿지 말고 `git status`/`git show`로 실제 반영·커밋 여부 확인. 작은 배선은 컨트롤러가 이어받아 검증·커밋.
+
+5. **post dict에 필드 추가 시 `/api/drafts` 직렬화도 함께 (E2E 테스트에서 발견)**: `/api/drafts/<gi>`는 **화이트리스트 직렬화**(title/content/tags/meta/hashtags만)라, `generate_drafts`가 post에 `seo_warnings`를 넣어도 API 응답에서 빠져 UI 배지가 안 떴다. 백엔드 단위테스트·회귀 전부 통과했는데 실제 E2E에서만 드러남. **교훈**: post 스키마 확장 시 소비 지점 3곳(generate_drafts→/api/drafts 직렬화→프론트) 전부 점검. 계획 단계에서 "데이터가 지나가는 모든 관문"을 나열할 것.
+
+6. **포트 5000에 옛 서버 3개 중첩(#7d 재발)**: bash에서 `powershell -Command "... \"name='python.exe'\" ..."` 이스케이프가 깨져 Stop-Process가 **조용히 실패** → 11시/14시/16시 서버 3개가 SO_REUSEADDR로 같이 리스닝, 옛 코드가 응답해 "count=10인데 방문 3개, 불용어 미적용"처럼 보였다. **교훈**: 재시작 후 반드시 `netstat -ano | grep :5000 | grep LISTENING | wc -l`이 **1인지 확인**. 죽일 땐 PID를 netstat에서 직접 뽑아 `taskkill //F //PID`.
+
+7. **curl로 한글 테스트 시 인코딩 2종 함정**: (a) `-F "photos=@한글파일.jpg"` → 멀티파트 파일명 깨져 "파일이 없습니다"(브라우저 업로드는 무관). ASCII 사본으로 테스트. (b) `-d '{"title":"한글"}'` → body가 cp949로 나가 Flask가 400 (utf-8 디코드 실패). UTF-8로 저장한 파일을 `--data-binary @file`로 보낼 것.
