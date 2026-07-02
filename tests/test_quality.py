@@ -491,3 +491,32 @@ def test_extract_profile_regex_fallback():
     assert p["tone"]                       # 톤이 채워짐
     assert isinstance(p["ending_patterns"], list)
     assert isinstance(p["examples"], list)
+
+
+# ── Task 3: StyleAnalyzer LLM 문체 추출 + 정규화 ──
+def test_normalize_profile_caps():
+    raw = {
+        "tone": "  친근  ",
+        "ending_patterns": ["~요", "~죠", "~네요", "~더라", "~군", "~구나", "~잖아"],  # 7개
+        "examples": ["문장1", "문장2", "문장3"],   # 3개
+        "rhetorical_habits": "질문형 도입",          # 문자열도 허용
+    }
+    p = StyleAnalyzer._normalize_profile(raw)
+    assert p["tone"] == "친근"                       # strip
+    assert len(p["ending_patterns"]) == 6            # 6개로 캡
+    assert len(p["examples"]) == 2                   # 2개로 캡(표절 방지)
+    assert p["rhetorical_habits"] == ["질문형 도입"]  # str→list
+    assert p["extracted_by"] == "llm"
+
+
+def test_extract_profile_uses_llm_when_valid(monkeypatch):
+    class FakeCfg:
+        def is_valid(self): return True
+        def get(self, *a): return "sk-test"
+    sa = StyleAnalyzer(FakeCfg())
+    fixture = {"tone": "감성체", "ending_patterns": ["~네요"], "examples": ["예시"],
+               "extracted_by": "llm", "warning": None}
+    monkeypatch.setattr(sa, "_extract_profile_llm", lambda text: fixture)
+    p = sa.extract_profile("아무 긴 텍스트 " * 10)
+    assert p is fixture
+    assert p["extracted_by"] == "llm"

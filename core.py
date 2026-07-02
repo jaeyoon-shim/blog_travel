@@ -179,6 +179,58 @@ class StyleAnalyzer:
             "warning": None,
         }
 
+    def _extract_profile_llm(self, text):
+        """LLM으로 문체 규칙 JSON 추출. 실패 시 None(폴백 유도)."""
+        if not text or len(text) < 30:
+            return None
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=self.config.get("openai", "api_key"))
+            model = self.config.get("openai", "model") or "gpt-4o-mini"
+            prompt = (
+                "다음은 한 블로거의 글이다. 이 사람의 '문체'만 분석해 JSON으로 출력하라. "
+                "내용/사실이 아니라 말투·리듬·습관만 본다. 확실한 것만, 없으면 빈 값/빈 배열. "
+                "키: tone(문장 톤 한 줄), sentence_length(문장 길이·리듬 한 줄), "
+                "ending_patterns(자주 쓰는 어미 배열, 예 '~더라고요'), "
+                "emoji_usage(이모지/초성 사용 습관 한 줄), "
+                "rhetorical_habits(수사·도입·전환 습관 배열), person(화자 시점 한 줄), "
+                "dos(살릴 특징 배열), donts(피할 것 배열), "
+                "examples(문체가 잘 드러나는 짧은 문장 1~2개 배열, 한 문장씩).\n\n"
+                f"[글]\n{text[:4000]}"
+            )
+            r = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
+            data = json.loads(r.choices[0].message.content)
+        except Exception as e:
+            logger.warning(f"⚠️ 문체 LLM 추출 실패: {e}")
+            return None
+        return self._normalize_profile(data)
+
+    @staticmethod
+    def _normalize_profile(data):
+        """LLM 응답 dict를 안정 스키마로 정규화 + 상한 적용."""
+        def _list(v, n):
+            if isinstance(v, str):
+                v = [v]
+            return [str(x).strip() for x in (v or []) if str(x).strip()][:n]
+        return {
+            "tone": str(data.get("tone", "") or "").strip(),
+            "sentence_length": str(data.get("sentence_length", "") or "").strip(),
+            "ending_patterns": _list(data.get("ending_patterns"), 6),
+            "emoji_usage": str(data.get("emoji_usage", "") or "").strip(),
+            "rhetorical_habits": _list(data.get("rhetorical_habits"), 6),
+            "person": str(data.get("person", "") or "").strip(),
+            "dos": _list(data.get("dos"), 5),
+            "donts": _list(data.get("donts"), 5),
+            "examples": _list(data.get("examples"), 2),
+            "extracted_by": "llm",
+            "warning": None,
+        }
+
     def _empty(self, url):
         return {"url":url,"title":"","headings":[],"sample_paragraphs":[],"tone":"친근 구어체",
                 "common_endings":["~했어요.","~더라고요."],"heading_count":0,"paragraph_count":0,
