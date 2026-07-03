@@ -161,6 +161,17 @@ def html_to_blocks(html_content, photos=None):
             special_ranges.append((m.start(), m.end(),
                 {"type": "heading", "content": title_text,
                  "place": place, "style": style_str}))
+
+    # 3-4) 일반 h2/h3 → heading 블록 (마크다운 '#' 리터럴 노출 버그 수정)
+    for m in _re.finditer(r'<h([23])[^>]*>(.*?)</h\1>', html_content,
+                          _re.DOTALL | _re.IGNORECASE):
+        if not any(s <= m.start() < e for s, e, _ in special_ranges):
+            title_text = _re.sub(r'<[^>]+>', '', m.group(2)).strip()
+            if title_text:
+                special_ranges.append((m.start(), m.end(),
+                    {"type": "heading", "content": title_text,
+                     "place": "", "style": ""}))
+
     # 3) 경로 카드 감지 (중첩 div 포함)
     #    패턴: <div style="background:linear-gradient...">..내부 div들..</div>
     for m in _re.finditer(
@@ -350,8 +361,8 @@ def _html_to_text_with_links(html):
         '', t, flags=re.DOTALL | re.IGNORECASE)
     # 다른 <a> 태그는 텍스트만
     t = re.sub(r'<a[^>]*>(.*?)</a>', r'\1', t, flags=re.DOTALL)
-    t = re.sub(r'<h2[^>]*>(.*?)</h2>', r'\n\n# \1\n', t)
-    t = re.sub(r'<h3[^>]*>(.*?)</h3>', r'\n## \1\n', t)
+    # h2/h3 제거 (3-4에서 heading 블록으로 처리됨 — 마크다운 변환 금지)
+    t = re.sub(r'<h[23][^>]*>.*?</h[23]>', '', t, flags=re.DOTALL)
     t = re.sub(r'<p[^>]*>(.*?)</p>', r'\1\n\n', t, flags=re.DOTALL)
     t = re.sub(r'<li[^>]*>(.*?)</li>', r'- \1\n', t, flags=re.DOTALL)
     t = re.sub(r'<ol[^>]*>(.*?)</ol>', r'\1', t, flags=re.DOTALL)

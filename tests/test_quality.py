@@ -628,3 +628,18 @@ def test_number_places():
     # PLACE 없음 → 무변경, 빈 입력 안전
     assert f("<p>그냥 본문</p>") == "<p>그냥 본문</p>"
     assert f("") == ""
+
+
+def test_html_to_blocks_no_markdown_heading():
+    from posters import html_to_blocks
+    html = ('<h3 style="text-align:center">📍 오사카시 여행 전 꼭 알아야 할 핵심 정보</h3>'
+            '<p>오사카시는 일본의 간사이 지방에 위치한 대도시입니다.</p>'
+            '<h2>여행 꿀팁</h2>')
+    blocks = html_to_blocks(html)
+    texts = [b.get("content", "") for b in blocks if b.get("type") == "text"]
+    # 마크다운 리터럴이 텍스트 블록에 남지 않는다 (## 노출 버그 회귀 방지)
+    assert not any(t.strip().startswith("#") for t in texts)
+    assert not any("##" in t for t in texts)
+    heads = [b for b in blocks if b.get("type") == "heading"]
+    assert any("핵심 정보" in h.get("content", "") for h in heads)
+    assert any("여행 꿀팁" in h.get("content", "") for h in heads)
