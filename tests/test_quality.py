@@ -142,6 +142,18 @@ def test_prompt_has_grounding_rules():
     assert "단정하지 마세요" in p and "반복하지 마세요" in p and "오감으로" in p
 
 
+def test_build_prompt_directives_section():
+    g = TravelBlogGenerator(Config())
+    photos = [{"location_name": "고쿠라 성", "file_name": "a.jpg",
+               "gps": {"lat": 33.88, "lon": 130.87}}]
+    style = {"name": "감성", "desc": "감성적"}
+    p = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "",
+                        place_directives={"고쿠라 성": "야경 사진 위주로 강조해줘"})
+    assert "장소별 필수 지시" in p and "야경 사진 위주" in p and "우선" in p
+    p2 = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "")
+    assert "장소별 필수 지시" not in p2
+
+
 # ── 무료 모드: Nominatim 주소 → 행정구역(city/region/country) ──
 def test_pick_admin():
     # city/province 직접 매칭

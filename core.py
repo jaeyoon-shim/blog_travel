@@ -1632,7 +1632,7 @@ class TripPlanner:
             by_pid[TripPlanner._photo_id(r.get("file_path", ""))] = r
         groups = []
         for d in plan.get("days", []):
-            photos, memos, meta, names = [], {}, {}, []
+            photos, memos, directives, meta, names = [], {}, {}, {}, []
             for s in d.get("stops", []):
                 name = s.get("name", "") or "미확인"
                 if name not in names:
@@ -1643,7 +1643,7 @@ class TripPlanner:
                 if s.get("feeling"):
                     bits.append("느낌: " + s["feeling"])
                 if s.get("ai_instruction"):
-                    bits.append("지시: " + s["ai_instruction"])
+                    directives[name] = s["ai_instruction"]
                 if bits:
                     memos[name] = " / ".join(bits)
                 rc = s.get("receipt") or {}
@@ -1670,6 +1670,7 @@ class TripPlanner:
                 "photos": photos,
                 "course_line": " → ".join(names),
                 "place_memos": memos,
+                "place_directives": directives,
                 "place_meta": meta,
             })
         return groups
@@ -1939,6 +1940,7 @@ class TravelBlogGenerator:
 
         # 장소별 메모
         place_memos = group.get("place_memos", {})
+        place_directives = group.get("place_directives", {})
 
         drafts = []
         for si, s in enumerate(styles):
@@ -1948,7 +1950,7 @@ class TravelBlogGenerator:
                 photos, photo_summary, course_line, region, region_desc,
                 group_label, trip_title, s, naver_ctx, style_ctx,
                 struct_ctx=struct_ctx, place_intros=place_intros,
-                place_memos=place_memos
+                place_memos=place_memos, place_directives=place_directives,
             )
             post = self._call_ai(prompt, s["temp"], photos)
             if post:
@@ -2187,7 +2189,7 @@ class TravelBlogGenerator:
 
     def _build_prompt(self, photos, photo_summary, course_line, region,
                       region_desc, group_label, trip_title, style, naver_ctx, style_ctx,
-                      struct_ctx="", place_intros="", place_memos=None):
+                      struct_ctx="", place_intros="", place_memos=None, place_directives=None):
         """AI 프롬프트 생성 — 세련된 여행 블로그 디자인"""
         title_hint = trip_title or "사진 데이터를 보고 매력적인 제목 생성"
 
@@ -2221,6 +2223,17 @@ class TravelBlogGenerator:
                     + "\n".join(memo_lines) + "\n"
                 )
 
+        # 장소별 필수 지시 (plan 검수에서 입력) — 일반 메모보다 격상, 최우선 준수
+        directive_ctx = ""
+        if place_directives:
+            d_lines = [f"  - {loc}: {d}" for loc, d in place_directives.items() if str(d).strip()]
+            if d_lines:
+                directive_ctx = (
+                    "\n[장소별 필수 지시 — 아래 지시는 반드시 그대로 따르세요. "
+                    "다른 규칙과 충돌하면 이 지시가 우선합니다]\n"
+                    + "\n".join(d_lines) + "\n"
+                )
+
         # 사용자 커스텀 스타일 설정 (settings.json에서)
         custom_style_ctx = ""
         if hasattr(self, '_custom_style_prompt') and self._custom_style_prompt:
@@ -2239,7 +2252,7 @@ class TravelBlogGenerator:
 [제목 힌트]: {title_hint}
 [제목 규칙]: 제목은 한글로, 지역+테마 중심. 확실하지 않은 추정 상호명(특히 영문)을 제목에 넣지 마세요.
 [코스]: {course_line}
-{naver_ctx}{style_ctx}{struct_ctx}{memo_ctx}{custom_style_ctx}
+{naver_ctx}{style_ctx}{struct_ctx}{memo_ctx}{directive_ctx}{custom_style_ctx}
 [방문 장소 목록 (시간순, 장소별 사진 수)]:
 {places_str}
 
