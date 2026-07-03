@@ -750,11 +750,12 @@ h+='<div id="bList">';
 const icons={text:'📝',image:'🖼',separator:'─',styled_label:'🏷',heading:'📌',route:'🗺',map_link:'📍'};
 blocks.forEach((b,i)=>{const s=i===selBlock;
 let pv='';if(b.type==='text')pv=(b.content||'').substring(0,50);else if(b.type==='image')pv='(이미지)';else if(b.type==='separator')pv='─ ─ ─';else pv=b.content||'';
-h+=`<div class="block-item ${s?'selected':''}" onclick="selBlk(${i})"><div class="bt">${icons[b.type]||'?'} ${b.type}</div><div class="bc">${esc(pv)}</div><div class="ba"><button class="ba-btn" onclick="event.stopPropagation();mvBlk(${i},-1)">↑</button><button class="ba-btn" onclick="event.stopPropagation();mvBlk(${i},1)">↓</button><button class="ba-btn" onclick="event.stopPropagation();delBlk(${i})">×</button></div></div>`});
+const EDITABLE=['text','styled_label','heading','route'];
+const inline=(s&&EDITABLE.includes(b.type))
+  ?`<textarea id="bEdit" style="width:100%;min-height:120px;margin-top:6px" oninput="editBlk(this.value)" onclick="event.stopPropagation()">${esc(b.content||'')}</textarea>`
+  :`<div class="bc">${esc(pv)}</div>`;
+h+=`<div class="block-item ${s?'selected':''}" onclick="selBlk(${i})"><div class="bt">${icons[b.type]||'?'} ${b.type}</div>${inline}<div class="ba"><button class="ba-btn" onclick="event.stopPropagation();mvBlk(${i},-1)">↑</button><button class="ba-btn" onclick="event.stopPropagation();mvBlk(${i},1)">↓</button><button class="ba-btn" onclick="event.stopPropagation();delBlk(${i})">×</button></div></div>`});
 h+='</div>';
-if(selBlock>=0&&selBlock<blocks.length){const b=blocks[selBlock];
-if(['text','styled_label','heading','route'].includes(b.type)){
-h+=`<div class="card mt-8"><div class="card-label">블록 #${selBlock+1} 편집</div><textarea id="bEdit" style="min-height:60px" oninput="editBlk(this.value)">${esc(b.content||'')}</textarea></div>`}}
 h+=`<button class="btn btn-ok w-full mt-12" onclick="go(6)">발행 준비 →</button>`;
 $eb.innerHTML=h}
 
