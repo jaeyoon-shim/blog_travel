@@ -778,6 +778,36 @@ def api_generate_all():
     return jsonify({"started":True,"total":total})
 
 
+# ── 피드백 재작성 (가안 → 최종본) ──
+@app.route('/api/revise', methods=['POST'])
+def api_revise():
+    data = request.json or {}
+    gi = int(data.get("gi", 0))
+    di = int(data.get("di", 0))
+    feedback = (data.get("feedback") or "").strip()
+    if not feedback:
+        return jsonify({"error": "피드백이 비어있습니다"}), 400
+    gs = state["group_states"].get(gi, {})
+    drafts = gs.get("drafts", [])
+    if di >= len(drafts):
+        return jsonify({"error": "초안 없음"}), 400
+    def task():
+        state["progress"] = {"status": "revising", "message": "피드백 반영해 재작성 중...", "percent": 0}
+        try:
+            new_post = state["generator"].revise_draft(
+                drafts[di], feedback, state.get("naver_analysis"))
+            if new_post:
+                drafts[di] = new_post
+                state["progress"] = {"status": "done", "message": "✅ 최종본 재작성 완료", "percent": 100}
+            else:
+                state["progress"] = {"status": "error",
+                                     "message": "❌ 재작성 실패 — 원본은 유지됩니다", "percent": 0}
+        except Exception as e:
+            state["progress"] = {"status": "error", "message": f"❌ {e} (원본 유지)", "percent": 0}
+    threading.Thread(target=task, daemon=True).start()
+    return jsonify({"started": True})
+
+
 # ── 초안/블록 ──
 @app.route('/api/drafts/<int:gi>')
 def api_drafts(gi):
