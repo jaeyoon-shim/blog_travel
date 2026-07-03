@@ -81,3 +81,17 @@
 7. **발행 브라우저는 반드시 poster.close()로 닫는다 (강제종료 금지)**: 발행 Chrome을 안 닫으면 selenium_profile 잠금으로 다음 발행 전멸("session not created"), 잠금을 taskkill로 강제 해제하면 **네이버 세션이 무효화**되어 다음 발행에서 수동 로그인(180초)이 다시 필요해진다. 또한 발행이 낳은 **chromedriver가 Flask의 5000 리스닝 소켓을 상속**한 채 살아남아, 서버를 죽여도 유령 리스너가 포트를 잡는다(HTTP 000). → 2026-07-03 수정: 발행 task `finally: poster.close()`(정상 종료라 세션 보존+소켓 해제). 검증: 연속 2건 발행 성공, 2번째는 로그인 생략, chromedriver 0.
 
 8. **curl로 한글 테스트 시 인코딩 2종 함정**: (a) `-F "photos=@한글파일.jpg"` → 멀티파트 파일명 깨져 "파일이 없습니다"(브라우저 업로드는 무관). ASCII 사본으로 테스트. (b) `-d '{"title":"한글"}'` → body가 cp949로 나가 Flask가 400 (utf-8 디코드 실패). UTF-8로 저장한 파일을 `--data-binary @file`로 보낼 것.
+
+---
+
+## 2026-07-03 — I라운드: 참고 포스트 퀄리티 업그레이드
+
+1. **잘 된 남의 포스트는 DOM으로 실측 분석하라**: /browse로 참고 포스트(blog.naver.com/eng1470)의 `se-component` 시퀀스를 추출하니 "구분선→이모지 헤더→사진 콜라주+캡션→본문→구글맵 OG 카드→↑↑위치↑↑" 정형 패턴이 바로 드러났다. 텍스트만 읽어서는 콜라주/oglink 구조를 알 수 없다. 네이버 블로그는 iframe(`mainFrame`)이라 `frame --name mainFrame` 전환 필요.
+
+2. **불변식 완화는 "이유"를 기준으로**: "구글맵 URL 절대 금지"의 이유는 본문 중 URL의 *비의도적* 카드 변환이었다. 참고 포스트는 반대로 독립 블록 URL로 카드를 *의도적으로* 유도한다 — 불변식을 "본문 텍스트 내 URL 금지 + 독립 블록 카드는 코드가 유도"로 정밀화(사용자 승인). AI 프롬프트의 URL 금지는 유지.
+
+3. **에디터 빈 줄에서 Shift+Home은 무선택**: `_paste_map_card` 변환 실패 폴백에서 Enter로 새 빈 줄에 내려온 상태로 Shift+Home+Delete 하면 아무것도 안 지워져 URL 원문이 발행물에 남는다. Backspace로 URL 줄 끝에 복귀 후 선택·삭제해야 함. (subagent 구현을 diff 리뷰로 잡아낸 케이스 — 발행 경로는 키 시퀀스를 커서 위치 기준으로 시뮬레이션하며 리뷰할 것.)
+
+4. **스펙의 매칭 키워드는 실제 데이터 enum과 대조**: `_expand_tags` 스펙이 영문 키워드(restaurant/cafe)만 나열했는데 실데이터 `vision.scene_type`은 한글 enum(맛집/신사/사찰)이라 그대로면 무동작이었다. fast-worker가 발견·보정. 매칭 로직 스펙을 쓸 때 실제 필드 값 도메인을 함께 명시할 것.
+
+5. **PIL Image.open은 with로**: Windows에서 핸들이 안 닫혀 임시파일 os.remove가 PermissionError. `with Image.open(p) as src:` 필수.

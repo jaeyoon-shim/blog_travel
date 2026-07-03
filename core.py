@@ -761,6 +761,8 @@ class PhotoAnalyzer:
                         r["location_name"] = gps_location
                         r["poi_resolved"] = True
                         r["name_confident"] = True
+                        if addr_data.get("place_id"):
+                            r["place_id"] = addr_data["place_id"]
                     else:
                         # 간판 교차검증 성공시에만 실명 신뢰, 아니면 중립 표기
                         poi = self._resolve_poi(exif["lat"], exif["lon"], scene_type, visible_name) if r.get("gps") else None
@@ -769,6 +771,8 @@ class PhotoAnalyzer:
                             r["poi_id"] = poi.get("id", "")
                             r["poi_resolved"] = True
                             r["name_confident"] = True
+                            if poi.get("id"):
+                                r["place_id"] = poi["id"]
                         else:
                             # 불확실 → 중립 표기 "{동네} {유형}" (사용자가 실명 입력)
                             r["location_name"] = self._make_place_name(
@@ -1058,6 +1062,8 @@ class PhotoAnalyzer:
                         result["korean"] = place.get("name","")
 
                     result["is_poi"] = True
+                    if place_id:
+                        result["place_id"] = place_id
                     logger.info(f"    🗺️ Google POI: {result['korean']} ({result['local']})")
                     # POI에도 city/region 가져오기 (SEO 키워드용)
                     try:
@@ -1901,6 +1907,12 @@ class TravelBlogGenerator:
         region = self._detect_region(photos)
         region = self._koreanize_region(region)  # 네이버 SEO: 지역명 한글 정규화
         region_desc = self._generate_region_desc(region, naver_analysis)
+        # 태그 확장(I5)용 방문 카테고리 수집 — 각 사진의 Vision scene_type/place_type
+        place_types = [
+            (p.get("vision", {}).get("scene_type") or p.get("vision", {}).get("place_type") or "")
+            for p in photos
+        ]
+        place_types = [t for t in place_types if t]
 
         _progress("⏳ 3/6 장소 특징 검색...")
         place_intros = self._search_place_intros(photos)
@@ -1966,7 +1978,9 @@ class TravelBlogGenerator:
                 post["region"] = region
                 post["photo_results"] = photos
                 # SEO 강제·검증 (E): 핵심 태그 병합 + 경고 부착
-                post["tags"] = self.merge_tags(post.get("tags"), self.extract_core_tags(naver_analysis, region))
+                # 태그 확장(I5): 핵심 태그 + 지역×방문카테고리 조합 태그(결정적) → AI 태그로 채움
+                core_and_expand = self.extract_core_tags(naver_analysis, region) + self._expand_tags(region, place_types)
+                post["tags"] = self.merge_tags(post.get("tags"), core_and_expand, cap=25)
                 # 제목 최적화 (G6) — 실측 상위 제목 패턴 기반, 노출 관련은 코드가 강제
                 best_title = self.optimize_title(post, naver_analysis, region)
                 if best_title:
@@ -2404,6 +2418,17 @@ class TravelBlogGenerator:
 
 9. 정확성: 데이터에 없는 구체적 사실(가격 등) 지어내지 않기
 
+10. ★★★ 추천 대상 문장 ★★★
+   - 각 장소 소개에 "어떤 사람에게 추천하는지" 문장을 1개 자연스럽게 포함하라
+     (예: "혼자 조용히 여행하는 사람에게 특히 추천한다")
+
+11. ★★★ 실용 정보는 근거 있는 것만 ★★★
+   - 가격·영업시간 등 실용 정보는 장소별 지시·영수증·실측 참고 자료에 명시된 것만 서술하라.
+     자료에 없는 숫자·시간을 지어내지 말 것
+
+12. ★★★ 짧은 단락 리듬 ★★★
+   - 한 단락은 2~4문장으로 짧게 끊어라. 각 장소는 경험담 → 실용정보 → 추천 순으로 전개하라
+
 [JSON 응답]
 {{"title":"제목 30~50자","content":"HTML본문","meta_description":"150자","tags":["태그x7"],"hashtags":["#해시x5"]}}"""
 
@@ -2618,9 +2643,60 @@ class TravelBlogGenerator:
             new_post, naver_analysis, (post or {}).get("region", ""))
         return new_post
 
+    @staticmethod
+    def _compose_collage(paths, out_dir=None):
+        """같은 장소 사진 2장을 EXIF 방향 보정 후 가로로 이어붙여 콜라주 이미지 생성
+        - 높이 1080px로 정규화(비율 유지) 후 사이 8px 흰 여백을 두고 결합
+        - JPEG q85로 임시파일 저장, 경로 반환
+        - 입력이 2장 미만이거나 파일 오류 시 None (호출부가 단독 삽입으로 폴백)
+        """
+        if not paths or len(paths) < 2:
+            return None
+        try:
+            from PIL import Image, ImageOps
+            import tempfile
+
+            resized = []
+            target_h = 1080
+            for p in paths[:2]:
+                if not p or not os.path.exists(p):
+                    return None
+                with Image.open(p) as src:
+                    img = src
+                    try:
+                        img = ImageOps.exif_transpose(img)
+                    except Exception:
+                        pass
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    w, h = img.size
+                    if h != target_h and h > 0:
+                        new_w = max(1, round(w * target_h / h))
+                        img = img.resize((new_w, target_h), Image.LANCZOS)
+                    else:
+                        img = img.copy()
+                    resized.append(img)
+
+            gap = 8
+            total_w = sum(im.width for im in resized) + gap
+            canvas = Image.new('RGB', (total_w, target_h), (255, 255, 255))
+            x = 0
+            for im in resized:
+                canvas.paste(im, (x, 0))
+                x += im.width + gap
+
+            fd, tmp_path = tempfile.mkstemp(suffix='.jpg', dir=out_dir)
+            os.close(fd)
+            canvas.save(tmp_path, format='JPEG', quality=85)
+            return tmp_path
+        except Exception as e:
+            logger.warning(f"⚠️ 콜라주 합성 실패: {e}")
+            return None
+
     def _insert_photos_with_map(self, content, results):
         """장소 매칭 기반 사진 삽입
-        - 같은 장소 사진 중 마지막에만 지도 1개
+        - 같은 장소 사진 2장은 콜라주로 합성해 한 장으로 삽입(홀수 마지막 1장은 단독)
+        - 같은 장소 중 마지막 청크에만 지도 1개
         - 장소→장소 이동 경로 안내
         """
         inserted = set()
@@ -2634,50 +2710,84 @@ class TravelBlogGenerator:
                 place_groups[loc] = []
             place_groups[loc].append(r)
 
-        # 각 장소의 마지막 사진 파일명 → 지도 표시 대상
-        map_photos = set()
+        # 장소별 렌더 유닛 구성: 2장씩 콜라주 청크(홀수 마지막은 단독), 마지막 청크만 지도 표시
+        units = []
         for loc, photos in place_groups.items():
-            if photos:
-                map_photos.add(photos[-1].get("file_name", ""))
+            chunks = [photos[i:i + 2] for i in range(0, len(photos), 2)]
+            for ci, chunk in enumerate(chunks):
+                is_last_chunk = (ci == len(chunks) - 1)
+                collage_path = None
+                if len(chunk) == 2:
+                    collage_path = self._compose_collage(
+                        [p.get("file_path", "") for p in chunk])
 
-        # 1단계: AI가 넣은 [PHOTO:] 태그 처리
-        for r in results:
-            fn = r.get("file_name", "")
-            tag = f"[PHOTO:{fn}]"
+                if collage_path:
+                    rep = chunk[-1]  # 지도/GPS 대표는 청크의 마지막 사진
+                    units.append({
+                        "photos": chunk,
+                        "fp": collage_path,
+                        "display": self._display_name(rep),
+                        "gps": rep.get("gps"),
+                        "show_map": is_last_chunk,
+                        "file_names": [p.get("file_name", "") for p in chunk],
+                        "place_id": rep.get("place_id", ""),
+                    })
+                else:
+                    for pi, r in enumerate(chunk):
+                        is_last_photo = is_last_chunk and (pi == len(chunk) - 1)
+                        units.append({
+                            "photos": [r],
+                            "fp": r.get("file_path", ""),
+                            "display": self._display_name(r),
+                            "gps": r.get("gps"),
+                            "show_map": is_last_photo,
+                            "file_names": [r.get("file_name", "")],
+                            "place_id": r.get("place_id", ""),
+                        })
+
+        # 1단계: AI가 넣은 [PHOTO:] 태그 처리 (유닛의 첫 사진 태그 위치에 삽입,
+        # 콜라주로 합쳐진 나머지 태그는 최종 정리 단계에서 제거)
+        for u in units:
+            anchor_fn = u["file_names"][0]
+            tag = f"[PHOTO:{anchor_fn}]"
             if tag in content:
+                map_card_url = (f"https://www.google.com/maps/place/?q=place_id:{u['place_id']}"
+                                 if u.get("place_id") else None)
                 html = self._photo_html(
-                    r.get("file_path", ""),
-                    self._display_name(r),
-                    r.get("gps"),
-                    show_map=(fn in map_photos))
+                    u["fp"], u["display"], u["gps"], show_map=u["show_map"],
+                    map_card_url=map_card_url)
                 content = content.replace(tag, html, 1)
-                inserted.add(fn)
+                for fn in u["file_names"]:
+                    inserted.add(fn)
+                u["_placed"] = True
+            else:
+                u["_placed"] = False
 
-        # 2단계: 누락 사진 → 장소 매칭으로 <h2> 섹션에 자동 삽입
-        missing = [r for r in results if r.get("file_name", "") not in inserted]
-        if missing:
-            logger.info(f"📸 사진 자동 배치: {len(missing)}/{len(results)}장 추가 삽입")
+        # 2단계: 누락 유닛 → 장소 매칭으로 <h2> 섹션에 자동 삽입
+        missing_units = [u for u in units if not u["_placed"]]
+        if missing_units:
+            missing_photo_cnt = sum(len(u["file_names"]) for u in missing_units)
+            logger.info(f"📸 사진 자동 배치: {missing_photo_cnt}/{len(results)}장 추가 삽입")
 
-            import re as _re
-            h2_pattern = _re.compile(
-                r'(<h2[^>]*>)(.*?)(</h2>)', _re.IGNORECASE | _re.DOTALL)
+            h2_pattern = re.compile(
+                r'(<h2[^>]*>)(.*?)(</h2>)', re.IGNORECASE | re.DOTALL)
             h2_matches = list(h2_pattern.finditer(content))
 
-            for r in missing:
-                fn = r.get("file_name", "")
-                loc = r.get("location_name", "")
+            for u in missing_units:
+                loc = u["photos"][0].get("location_name", "")
+                fns = u["file_names"]
+                map_card_url = (f"https://www.google.com/maps/place/?q=place_id:{u['place_id']}"
+                                 if u.get("place_id") else None)
                 html = self._photo_html(
-                    r.get("file_path", ""),
-                    self._display_name(r),
-                    r.get("gps"),
-                    show_map=(fn in map_photos))
+                    u["fp"], u["display"], u["gps"], show_map=u["show_map"],
+                    map_card_url=map_card_url)
 
                 placed = False
                 if loc and h2_matches:
                     best_match = None
                     best_score = 0
                     for m in h2_matches:
-                        h2_text = _re.sub(r'<[^>]+>', '', m.group(2)).strip()
+                        h2_text = re.sub(r'<[^>]+>', '', m.group(2)).strip()
                         loc_chars = set(loc.replace(" ", ""))
                         h2_chars = set(h2_text.replace(" ", ""))
                         if not loc_chars: continue
@@ -2707,19 +2817,21 @@ class TravelBlogGenerator:
                         content = content[:insert_pos] + '\n<br/>\n' + html + content[insert_pos:]
                         h2_matches = list(h2_pattern.finditer(content))
                         placed = True
-                        inserted.add(fn)
+                        for fn in fns:
+                            inserted.add(fn)
 
                 if not placed:
-                    inserted.add(fn)
+                    for fn in fns:
+                        inserted.add(fn)
                     for marker in ['<div class="travel-tips">', '<div class="outro">',
                                    '🚆', '여행 꿀팁']:
                         if marker in content:
                             content = content.replace(marker,
-                                f'<h3>📸 {self._display_name(r)}</h3>\n{html}\n{marker}', 1)
+                                f'<h3>📸 {u["display"]}</h3>\n{html}\n{marker}', 1)
                             placed = True
                             break
                     if not placed:
-                        content += f'\n<h3>📸 {self._display_name(r)}</h3>\n{html}'
+                        content += f'\n<h3>📸 {u["display"]}</h3>\n{html}'
 
         # 3단계: 장소→장소 이동 경로 안내 삽입
         content = self._insert_route_guides(content, place_groups)
@@ -2731,13 +2843,48 @@ class TravelBlogGenerator:
         # 연속된 구분선(─) 문단 중복 제거 → 1개로 정규화
         content = self._dedupe_separators(content)
 
+        # 인트로 코스 요약 한 줄(코드 조립 — AI 미개입, 순서 왜곡/환각 방지)
+        content = self._insert_course_summary(content, results)
+
         total = len(results)
         placed_cnt = len(inserted)
         if placed_cnt < total:
             logger.warning(f"⚠️ 사진 {placed_cnt}/{total}장만 삽입됨")
         else:
-            logger.info(f"✅ 사진 {total}장 전체 삽입, 지도 {len(map_photos)}개 (장소당 1개)")
+            logger.info(f"✅ 사진 {total}장 전체 삽입")
         return content
+
+    @staticmethod
+    def _insert_course_summary(content, results):
+        """방문 순서 그대로 'A → B → C' 코스 요약 한 줄을 첫 <h2> 직전(없으면 본문 맨 앞)에 삽입.
+        AI에게 맡기지 않고 코드가 조립(순서 왜곡·환각 방지). URL 없음. 순수함수.
+        장소가 8개 초과면 사진 수 상위 8개만 남기되 원래 방문 순서는 유지한다."""
+        if not content or not results:
+            return content or ""
+        from collections import OrderedDict
+        counts = OrderedDict()
+        for r in results:
+            loc = (r.get("location_name") or "").strip()
+            if not loc or loc == "미확인":
+                continue
+            counts[loc] = counts.get(loc, 0) + 1
+
+        names = list(counts.keys())
+        if len(names) > 8:
+            top8 = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:8]
+            top_names = {n for n, _ in top8}
+            names = [n for n in names if n in top_names]
+
+        if len(names) < 2:
+            return content
+
+        summary = " → ".join(names)
+        html = f'<p style="text-align:center;margin:16px 0;color:#666">🚶 {summary}</p>'
+
+        m = re.search(r'<h2', content, re.IGNORECASE)
+        if m:
+            return content[:m.start()] + html + '\n' + content[m.start():]
+        return html + '\n' + content
 
     def _fetch_route_data(self, photos, route_modes):
         """장소→장소 구간별 Google Directions API로 경로 정보 조회
@@ -3101,7 +3248,7 @@ class TravelBlogGenerator:
             return f"{loc_kr} ({loc_local})"
         return loc_kr or loc_local or "여행지"
 
-    def _photo_html(self, fp, display, gps, show_map=True):
+    def _photo_html(self, fp, display, gps, show_map=True, map_card_url=None):
         """단일 사진의 HTML 생성 — EXIF 방향 보정 + base64 인코딩"""
         import base64, mimetypes, io
 
@@ -3133,14 +3280,22 @@ class TravelBlogGenerator:
             f'</figure>\n'
         )
 
-        if gps and show_map:
-            # 구글맵 URL 없이 장소명 텍스트만 표시
-            # (네이버 에디터에서 URL 붙여넣기 시 OG 카드 문제 방지)
+        # 캡션 라인은 항상 출력(가운데 정렬·회색·작은 글씨). 📍 접두는 지도 표시
+        # 대상(show_map)이고 GPS가 있을 때만 붙는다(구글맵 URL은 절대 넣지 않는다 —
+        # 네이버 에디터에서 URL 붙여넣기 시 OG 카드로 변환되는 문제 방지).
+        if display:
+            caption_text = f"📍 {display}" if (gps and show_map) else display
             img_html += (
                 f'<p style="text-align:center;margin:4px 0 20px;'
-                f'color:#8B9467;font-size:.85em">'
-                f'📍 {display}</p>\n'
+                f'color:#999;font-size:.85em">'
+                f'{caption_text}</p>\n'
             )
+            # 발행용 지도 카드 마커(주석) — 미리보기에는 안 보이고, 발행기가
+            # html_to_blocks에서 map_card 블록으로 변환해 OG 카드 변환을 유도한다.
+            # 본문 텍스트에는 여전히 URL을 노출하지 않는다(불변식 유지).
+            if show_map and gps and map_card_url:
+                safe_display = display.replace("|", "").replace("-->", "")
+                img_html += f'<!--MAPCARD:{map_card_url}|{safe_display}-->\n'
 
         return img_html
 
@@ -3357,7 +3512,41 @@ class TravelBlogGenerator:
         return tags[:5]
 
     @staticmethod
-    def merge_tags(ai_tags, core_tags, cap=10):
+    def _expand_tags(region, place_types):
+        """지역×방문 카테고리 조합 태그를 결정적으로 생성 (LLM 없음).
+        region이 비어 있으면 빈 리스트. 카테고리 태그는 실제 방문한(place_types에
+        존재하는) 카테고리에 대해서만 생성한다(방문 안 한 카테고리 환각 금지 — lessons #3).
+        place_types: 방문 stop들의 scene/POI 타입 문자열 목록(예: vision scene_type)."""
+        region = (region or "").strip()
+        if not region:
+            return []
+
+        tags = [f"{region}여행", f"{region}여행코스", f"{region}가볼만한곳"]
+
+        combined = " ".join(str(t).strip().lower() for t in (place_types or []) if t)
+
+        def has(*keywords):
+            return any(k in combined for k in keywords)
+
+        # 카테고리 키워드: 스펙에 명시된 영/한 표기 + 실제 Vision scene_type 한글 값(신사/사찰/공원/맛집 등)을
+        # 함께 매칭해야 실사용 데이터(코드베이스 scene_type 한글 enum)에서 정상 작동한다.
+        if has("restaurant", "food", "음식점", "식당", "맛집"):
+            tags.append(f"{region}맛집")
+        if has("cafe", "카페"):
+            tags.append(f"{region}카페")
+        if has("hotel", "lodging", "숙소", "료칸"):
+            tags.append(f"{region}숙소")
+        if has("temple", "shrine", "park", "attraction", "명소", "관광", "신사", "사찰", "공원"):
+            tags.append(f"{region}관광지")
+        if has("market", "시장"):
+            tags.append(f"{region}시장")
+        if has("bar", "izakaya", "이자카야", "술집"):
+            tags.append(f"{region}이자카야")
+
+        return tags
+
+    @staticmethod
+    def merge_tags(ai_tags, core_tags, cap=25):
         """핵심 태그(코드 추출)를 앞에 보장하고 AI 태그로 채움.
         공백/# 무시 정규화로 중복 제거, 상한 cap."""
         def norm(t):

@@ -572,12 +572,58 @@ def test_merge_tags():
     ai = ["# 후쿠오카", "야타이", "텐진", "라멘 ", "야경", "온천", "신사", "공원", "카페", "쇼핑"]
     merged = TravelBlogGenerator.merge_tags(ai, core)
     assert merged[:3] == core                       # 핵심 태그 우선 배치
-    assert len(merged) <= 10                        # 상한
+    assert len(merged) <= 25                        # 상한(기본값, I5: 10→25)
     norm = [t.replace(" ", "").replace("#", "") for t in merged]
     assert len(norm) == len(set(norm))              # 정규화 기준 중복 없음("# 후쿠오카"/"라멘 " 제거됨)
     # 빈 입력 안전
     assert TravelBlogGenerator.merge_tags(None, []) == []
     assert TravelBlogGenerator.merge_tags(["a"], None) == ["a"]
+    # 명시적 cap은 여전히 존중(하위호환)
+    assert len(TravelBlogGenerator.merge_tags(ai, core, cap=5)) == 5
+
+
+def test_merge_tags_cap25_default():
+    core = ["후쿠오카", "후쿠오카여행"]
+    ai = [f"태그{i}" for i in range(40)]             # core+ai 합쳐 25개 초과
+    merged = TravelBlogGenerator.merge_tags(ai, core)
+    assert len(merged) == 25                         # 기본 cap=25에서 정확히 잘림
+    assert merged[:2] == core                        # 핵심 태그 우선 순서 유지
+
+
+def test_expand_tags():
+    # 지역 없으면 빈 리스트
+    assert TravelBlogGenerator._expand_tags("", ["맛집", "카페"]) == []
+
+    # 무조건 포함 태그 + 방문 카테고리 없으면 카테고리 태그 미생성
+    tags = TravelBlogGenerator._expand_tags("기타큐슈", [])
+    assert tags == ["기타큐슈여행", "기타큐슈여행코스", "기타큐슈가볼만한곳"]
+    assert "기타큐슈맛집" not in tags                # 방문 안 한 카테고리는 환각 금지
+
+    # 방문 타입 기반 필터: 실제 방문 카테고리만 태그 생성
+    place_types = ["맛집", "카페", "숙소", "이자카야"]
+    tags = TravelBlogGenerator._expand_tags("기타큐슈", place_types)
+    assert "기타큐슈맛집" in tags
+    assert "기타큐슈카페" in tags
+    assert "기타큐슈숙소" in tags
+    assert "기타큐슈이자카야" in tags
+    assert "기타큐슈관광지" not in tags               # 관광지 관련 방문 없음 → 미생성
+    assert "기타큐슈시장" not in tags                 # 시장 방문 없음 → 미생성
+
+    # 관광지/시장 카테고리도 개별 확인
+    tags2 = TravelBlogGenerator._expand_tags("고쿠라", ["신사", "시장"])
+    assert "고쿠라관광지" in tags2
+    assert "고쿠라시장" in tags2
+    assert "고쿠라맛집" not in tags2
+
+
+def test_expand_tags_merge_core_priority():
+    # expand+core 병합 시 core가 항상 앞에 오도록 배선되는지(merge_tags 재사용 규약)
+    core = TravelBlogGenerator.extract_core_tags({"common_keywords": ["라멘", "맛집"]}, "고쿠라")
+    expand = TravelBlogGenerator._expand_tags("고쿠라", ["맛집", "이자카야"])
+    merged = TravelBlogGenerator.merge_tags(["AI태그1", "AI태그2"], core + expand, cap=25)
+    assert merged[:len(core)] == core                # core가 최우선
+    for t in expand:
+        assert t in merged                           # expand 태그도 반영
 
 
 def test_seo_check_warnings():
@@ -860,3 +906,188 @@ def test_plan_dir_unique_untitled():
     assert "여행_" in d and "untitled" not in d      # 자동 이름 부여
     assert app_mod._plan_dir() == d                   # 같은 세션에선 일관(캐시)
     app_mod.state["plan"], app_mod.state["_plan_dir"] = old_plan, old_dir
+
+
+# ── I1: 같은 장소 사진 콜라주 합성 ──
+def test_compose_collage_normalizes_height(tmp_path):
+    from PIL import Image
+    portrait = tmp_path / "portrait.jpg"
+    landscape = tmp_path / "landscape.jpg"
+    Image.new("RGB", (600, 1200), (200, 50, 50)).save(portrait, "JPEG")
+    Image.new("RGB", (1600, 900), (50, 50, 200)).save(landscape, "JPEG")
+
+    out = TravelBlogGenerator._compose_collage([str(portrait), str(landscape)])
+    assert out and os.path.exists(out)
+    with Image.open(out) as collage:
+        collage.load()
+        height, width = collage.height, collage.width
+    assert height == 1080
+    # 콜라주 폭은 두 사진을 각각 1080 높이로 정규화한 폭보다 커야 한다(가로 결합 검증)
+    w1 = round(600 * 1080 / 1200)
+    w2 = round(1600 * 1080 / 900)
+    assert width > w1 and width > w2
+    assert width >= w1 + w2  # 사이 여백 포함
+    os.remove(out)
+
+
+def test_compose_collage_fallback_none():
+    from PIL import Image
+    # 1장만 주면 콜라주 대상이 아니므로 None
+    assert TravelBlogGenerator._compose_collage(["u/only_one.jpg"]) is None
+    # 존재하지 않는 경로는 실패 → None
+    assert TravelBlogGenerator._compose_collage(
+        ["u/nope1.jpg", "u/nope2.jpg"]) is None
+    assert TravelBlogGenerator._compose_collage(None) is None
+    assert TravelBlogGenerator._compose_collage([]) is None
+
+
+def test_insert_photos_with_map_collages_same_place(tmp_path):
+    from PIL import Image
+    p1 = tmp_path / "a.jpg"
+    p2 = tmp_path / "b.jpg"
+    Image.new("RGB", (800, 600), (10, 200, 10)).save(p1, "JPEG")
+    Image.new("RGB", (600, 800), (10, 10, 200)).save(p2, "JPEG")
+
+    results = [
+        {"file_name": "a.jpg", "file_path": str(p1),
+         "location_name": "오타루 운하", "gps": {"lat": 43.19, "lon": 140.99}},
+        {"file_name": "b.jpg", "file_path": str(p2),
+         "location_name": "오타루 운하", "gps": {"lat": 43.19, "lon": 140.99}},
+    ]
+    content = "<h2>오타루 운하</h2><p>[PHOTO:a.jpg]운하 산책[PHOTO:b.jpg]더 걸었다</p>"
+
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)  # API 없이 메서드만
+    out = g._insert_photos_with_map(content, results)
+
+    assert out.count("<figure") == 1          # 2장이 콜라주 1개로 합성
+    assert "[PHOTO:" not in out                # 잔존 태그 없음
+    assert "오타루 운하" in out                 # 캡션 라인 유지
+
+
+# ── I2: 구글맵 장소 OG 카드 — place_id 보존·MAPCARD 마커 ──
+def test_photo_html_no_marker_without_place_id():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    html = g._photo_html("nope.jpg", "오타루 운하", {"lat": 43.19, "lon": 140.99},
+                          show_map=True, map_card_url=None)
+    assert "MAPCARD" not in html
+    assert "📍 오타루 운하" in html  # 지도 폴백 캡션은 유지
+
+
+def test_photo_html_marker_with_place_id():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    url = "https://www.google.com/maps/place/?q=place_id:ChIJabc123"
+    html = g._photo_html("nope.jpg", "오타루 운하", {"lat": 43.19, "lon": 140.99},
+                          show_map=True, map_card_url=url)
+    assert f"<!--MAPCARD:{url}|오타루 운하-->" in html
+    assert "📍 오타루 운하" in html  # 미리보기용 캡션은 그대로 노출(마커는 주석)
+
+
+def test_insert_photos_with_map_generates_marker_when_place_id(tmp_path):
+    from PIL import Image
+    p1 = tmp_path / "c.jpg"
+    Image.new("RGB", (800, 600), (10, 200, 10)).save(p1, "JPEG")
+    results = [
+        {"file_name": "c.jpg", "file_path": str(p1), "location_name": "오타루 운하",
+         "gps": {"lat": 43.19, "lon": 140.99}, "place_id": "ChIJabc123"},
+    ]
+    content = "<h2>오타루 운하</h2><p>[PHOTO:c.jpg]운하 산책</p>"
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    out = g._insert_photos_with_map(content, results)
+    assert "<!--MAPCARD:https://www.google.com/maps/place/?q=place_id:ChIJabc123|오타루 운하-->" in out
+
+
+def test_html_to_blocks_map_card_marker():
+    from posters import html_to_blocks
+    url = "https://www.google.com/maps/place/?q=place_id:ChIJabc123"
+    html = (f'<figure><img src="file:///x.jpg" alt="오타루 운하"/></figure>'
+            f'<p style="text-align:center;color:#999">📍 오타루 운하</p>'
+            f'<!--MAPCARD:{url}|오타루 운하-->'
+            f'<p>다음 문단 본문</p>')
+    blocks = html_to_blocks(html)
+    cards = [b for b in blocks if b.get("type") == "map_card"]
+    assert len(cards) == 1
+    assert cards[0]["url"] == url
+    assert cards[0]["label"] == "↑↑ 오타루 운하 위치 ↑↑"
+    # 마커 텍스트가 text 블록에 잔존하지 않는다
+    texts = [b.get("content", "") for b in blocks if b.get("type") == "text"]
+    assert not any("MAPCARD" in t for t in texts)
+
+
+def test_html_to_blocks_no_marker_no_map_card():
+    from posters import html_to_blocks
+    html = '<p>일반 본문 텍스트, 지도 카드 없음</p>'
+    blocks = html_to_blocks(html)
+    assert not any(b.get("type") == "map_card" for b in blocks)
+
+
+# ── I3·I4: 실용정보/추천대상 프롬프트 규칙 + 인트로 코스 요약 코드조립 ──
+def test_prompt_has_recommend_and_practical_info_rules():
+    g = TravelBlogGenerator(Config())
+    photos = [{"location_name": "고쿠라 성", "file_name": "a.jpg",
+               "gps": {"lat": 33.88, "lon": 130.87}}]
+    style = {"name": "감성", "desc": "감성적"}
+    p = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "")
+    assert "추천하는지" in p
+    assert "지어내지 말 것" in p
+    assert "경험담" in p and "추천 순" in p
+    # 기존 URL/구글맵 금지 규칙이 약화·삭제되지 않았는지 회귀 확인
+    assert "구글맵/이동경로 HTML을 절대 넣지 마세요" in p
+
+
+def test_insert_course_summary_order_and_position():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    results = [
+        {"location_name": "A"},
+        {"location_name": "B"},
+        {"location_name": "C"},
+    ]
+    content = "<div>인트로</div><h2>A</h2><p>본문</p>"
+    out = g._insert_course_summary(content, results)
+    assert "A → B → C" in out
+    # <h2> 직전에 삽입되어야 한다
+    idx_summary = out.index("A → B → C")
+    idx_h2 = out.index("<h2>A</h2>")
+    assert idx_summary < idx_h2
+    assert "🚶" in out
+
+
+def test_insert_course_summary_truncates_to_top8_keeps_order():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    # 방문 순서: P1..P10. 사진 수는 서로 달라(중복 없음) 상위8/하위2 경계가 명확하다.
+    # 최저 2곳(P3=2장, P5=1장)이 제외되고, 나머지 8곳은 사진수 순이 아니라 "방문 순서"로 남아야 한다.
+    photo_counts = {"P1": 3, "P2": 9, "P3": 2, "P4": 8, "P5": 1,
+                    "P6": 7, "P7": 6, "P8": 5, "P9": 4, "P10": 10}
+    results = []
+    for name, cnt in photo_counts.items():
+        results.extend([{"location_name": name}] * cnt)
+    content = "<h2>인트로</h2>"
+    out = g._insert_course_summary(content, results)
+    expected = "P1 → P2 → P4 → P6 → P7 → P8 → P9 → P10"
+    assert expected in out
+    assert "P3 →" not in out and "→ P3" not in out
+    assert "P5 →" not in out and "→ P5" not in out
+
+
+def test_insert_course_summary_single_place_not_inserted():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    results = [{"location_name": "혼자장소"}, {"location_name": "미확인"}]
+    content = "<h2>혼자장소</h2>"
+    out = g._insert_course_summary(content, results)
+    assert out == content
+    assert "🚶" not in out
+
+
+def test_insert_course_summary_excludes_unconfirmed():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    results = [
+        {"location_name": "미확인"},
+        {"location_name": "A"},
+        {"location_name": ""},
+        {"location_name": "B"},
+    ]
+    content = "<h2>A</h2>"
+    out = g._insert_course_summary(content, results)
+    assert "A → B" in out
+    summary_line = out.split("🚶")[1].split("</p>")[0]
+    assert "미확인" not in summary_line
+

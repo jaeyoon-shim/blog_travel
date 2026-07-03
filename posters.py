@@ -124,6 +124,20 @@ def html_to_blocks(html_content, photos=None):
             special_ranges.append((m.start(), m.end(),
                 {"type": "image", "path": path}))
 
+    # 2-1) 지도 카드 마커(<!--MAPCARD:url|display-->) → map_card 블록
+    #      (place_id 기반 구글맵 OG 카드 유도, I2. 본문 텍스트에는 URL 미노출 유지)
+    for m in _re.finditer(
+        r'<!--MAPCARD:(.*?)\|(.*?)-->',
+        html_content, _re.DOTALL):
+        if any(s <= m.start() < e for s, e, _ in special_ranges):
+            continue
+        card_url = m.group(1).strip()
+        card_display = m.group(2).strip()
+        if card_url:
+            special_ranges.append((m.start(), m.end(),
+                {"type": "map_card", "url": card_url,
+                 "label": f"↑↑ {card_display} 위치 ↑↑", "display": card_display}))
+
     # 3-1) 구분선 패턴 감지 (─ ─ ─ 또는 ━━━ 등)
     for m in _re.finditer(
         r'<p[^>]*>[\s]*[─━\-─]{2,}[\s─━\-─ ]*</p>',
@@ -274,6 +288,8 @@ def html_to_blocks(html_content, photos=None):
             blocks.append(block_data)
         elif block_data["type"] == "map_link":
             blocks.append(block_data)
+        elif block_data["type"] == "map_card":
+            blocks.append(block_data)
         elif block_data["type"] == "separator":
             blocks.append({"type": "separator"})
         elif block_data["type"] == "styled_label":
@@ -329,6 +345,7 @@ def html_to_blocks(html_content, photos=None):
                 f"제목 {sum(1 for b in blocks if b['type']=='heading')}, "
                 f"라벨 {sum(1 for b in blocks if b['type']=='styled_label')}, "
                 f"지도 {sum(1 for b in blocks if b['type']=='map_link')}, "
+                f"지도카드 {sum(1 for b in blocks if b['type']=='map_card')}, "
                 f"경로 {sum(1 for b in blocks if b['type']=='route')})")
     return blocks
 
@@ -1081,6 +1098,58 @@ class NaverSeleniumPoster(_SeleniumBase):
         time.sleep(0.5)
         return True
 
+    def _paste_map_card(self, url, label, display=""):
+        """구글맵 place URL을 독립 문단으로 붙여 넣어 네이버 에디터의 OG 카드
+        (.se-oglink) 변환을 유도한다(I2). 카드 실패는 발행을 막으면 안 되므로
+        전체를 방어적으로 처리하고, 실패 시 기존 📍 텍스트 폴백으로 대체한다."""
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.common.keys import Keys
+        from selenium.webdriver.common.action_chains import ActionChains
+        try:
+            before_count = len(self.driver.find_elements(
+                By.CSS_SELECTOR, ".se-oglink, .se-module-oglink"))
+
+            self._clipboard_set_text(url)
+            time.sleep(0.15)
+            actions = ActionChains(self.driver)
+            actions.key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+            time.sleep(0.5)
+            actions.send_keys(Keys.ENTER).perform()
+
+            # OG 카드 변환 폴링 (0.5초 간격, 최대 8초)
+            converted = False
+            for _ in range(16):
+                time.sleep(0.5)
+                after_count = len(self.driver.find_elements(
+                    By.CSS_SELECTOR, ".se-oglink, .se-module-oglink"))
+                if after_count > before_count:
+                    converted = True
+                    break
+
+            if converted:
+                actions2 = ActionChains(self.driver)
+                actions2.send_keys(Keys.ENTER).perform()
+                time.sleep(0.3)
+                self._paste_text(label)
+                logger.info(f"  지도 카드: 변환 성공 ({display})")
+            else:
+                # 변환 실패 → 붙인 URL 문단 삭제 후 📍 텍스트 폴백.
+                # Enter로 이미 빈 새 줄에 내려온 상태라, Backspace로 URL 줄 끝에
+                # 되돌아간 뒤 Shift+Home으로 줄 전체를 선택해 지운다
+                # (빈 줄에서 Shift+Home은 아무것도 선택하지 않아 URL이 본문에 남는다).
+                actions2 = ActionChains(self.driver)
+                actions2.send_keys(Keys.BACKSPACE).perform()
+                time.sleep(0.15)
+                actions2.key_down(Keys.SHIFT).send_keys(Keys.HOME).key_up(Keys.SHIFT).perform()
+                time.sleep(0.1)
+                actions2.send_keys(Keys.DELETE).perform()
+                time.sleep(0.2)
+                self._paste_text(f"📍 {display}" if display else "📍 지도에서 보기")
+                logger.info(f"  지도 카드: 변환 실패 → 텍스트 폴백 ({display})")
+        except Exception as e:
+            # 카드 실패가 발행 자체를 막으면 안 된다 — 로그만 남기고 계속 진행
+            logger.warning(f"  지도 카드 처리 실패(무시하고 계속): {e}")
+
     @staticmethod
     def _visibility_target(visibility):
         """공개설정 입력값(영문 키 또는 한글)을 네이버 라벨로 정규화.
@@ -1221,6 +1290,12 @@ class NaverSeleniumPoster(_SeleniumBase):
                     content = block.get("content", "📍 지도에서 보기")
                     if url:
                         self._paste_hyperlink(content, url)
+                elif btype == "map_card":
+                    url = block.get("url", "")
+                    label = block.get("label", "↑↑ 위치 ↑↑")
+                    display = block.get("display", "")
+                    if url:
+                        self._paste_map_card(url, label, display)
                 elif btype == "route":
                     self._paste_text(block["content"])
                     route_img = route_images.get(i)
