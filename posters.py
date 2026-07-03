@@ -1133,8 +1133,13 @@ class NaverSeleniumPoster(_SeleniumBase):
                 self._paste_text(label)
                 logger.info(f"  지도 카드: 변환 성공 ({display})")
             else:
-                # 변환 실패 → 붙인 URL 문단 삭제 후 📍 텍스트 폴백
+                # 변환 실패 → 붙인 URL 문단 삭제 후 📍 텍스트 폴백.
+                # Enter로 이미 빈 새 줄에 내려온 상태라, Backspace로 URL 줄 끝에
+                # 되돌아간 뒤 Shift+Home으로 줄 전체를 선택해 지운다
+                # (빈 줄에서 Shift+Home은 아무것도 선택하지 않아 URL이 본문에 남는다).
                 actions2 = ActionChains(self.driver)
+                actions2.send_keys(Keys.BACKSPACE).perform()
+                time.sleep(0.15)
                 actions2.key_down(Keys.SHIFT).send_keys(Keys.HOME).key_up(Keys.SHIFT).perform()
                 time.sleep(0.1)
                 actions2.send_keys(Keys.DELETE).perform()
