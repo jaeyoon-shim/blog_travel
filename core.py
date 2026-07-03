@@ -761,6 +761,8 @@ class PhotoAnalyzer:
                         r["location_name"] = gps_location
                         r["poi_resolved"] = True
                         r["name_confident"] = True
+                        if addr_data.get("place_id"):
+                            r["place_id"] = addr_data["place_id"]
                     else:
                         # 간판 교차검증 성공시에만 실명 신뢰, 아니면 중립 표기
                         poi = self._resolve_poi(exif["lat"], exif["lon"], scene_type, visible_name) if r.get("gps") else None
@@ -769,6 +771,8 @@ class PhotoAnalyzer:
                             r["poi_id"] = poi.get("id", "")
                             r["poi_resolved"] = True
                             r["name_confident"] = True
+                            if poi.get("id"):
+                                r["place_id"] = poi["id"]
                         else:
                             # 불확실 → 중립 표기 "{동네} {유형}" (사용자가 실명 입력)
                             r["location_name"] = self._make_place_name(
@@ -1058,6 +1062,8 @@ class PhotoAnalyzer:
                         result["korean"] = place.get("name","")
 
                     result["is_poi"] = True
+                    if place_id:
+                        result["place_id"] = place_id
                     logger.info(f"    🗺️ Google POI: {result['korean']} ({result['local']})")
                     # POI에도 city/region 가져오기 (SEO 키워드용)
                     try:
@@ -2705,6 +2711,7 @@ class TravelBlogGenerator:
                         "gps": rep.get("gps"),
                         "show_map": is_last_chunk,
                         "file_names": [p.get("file_name", "") for p in chunk],
+                        "place_id": rep.get("place_id", ""),
                     })
                 else:
                     for pi, r in enumerate(chunk):
@@ -2716,6 +2723,7 @@ class TravelBlogGenerator:
                             "gps": r.get("gps"),
                             "show_map": is_last_photo,
                             "file_names": [r.get("file_name", "")],
+                            "place_id": r.get("place_id", ""),
                         })
 
         # 1단계: AI가 넣은 [PHOTO:] 태그 처리 (유닛의 첫 사진 태그 위치에 삽입,
@@ -2724,8 +2732,11 @@ class TravelBlogGenerator:
             anchor_fn = u["file_names"][0]
             tag = f"[PHOTO:{anchor_fn}]"
             if tag in content:
+                map_card_url = (f"https://www.google.com/maps/place/?q=place_id:{u['place_id']}"
+                                 if u.get("place_id") else None)
                 html = self._photo_html(
-                    u["fp"], u["display"], u["gps"], show_map=u["show_map"])
+                    u["fp"], u["display"], u["gps"], show_map=u["show_map"],
+                    map_card_url=map_card_url)
                 content = content.replace(tag, html, 1)
                 for fn in u["file_names"]:
                     inserted.add(fn)
@@ -2746,8 +2757,11 @@ class TravelBlogGenerator:
             for u in missing_units:
                 loc = u["photos"][0].get("location_name", "")
                 fns = u["file_names"]
+                map_card_url = (f"https://www.google.com/maps/place/?q=place_id:{u['place_id']}"
+                                 if u.get("place_id") else None)
                 html = self._photo_html(
-                    u["fp"], u["display"], u["gps"], show_map=u["show_map"])
+                    u["fp"], u["display"], u["gps"], show_map=u["show_map"],
+                    map_card_url=map_card_url)
 
                 placed = False
                 if loc and h2_matches:
@@ -3180,7 +3194,7 @@ class TravelBlogGenerator:
             return f"{loc_kr} ({loc_local})"
         return loc_kr or loc_local or "여행지"
 
-    def _photo_html(self, fp, display, gps, show_map=True):
+    def _photo_html(self, fp, display, gps, show_map=True, map_card_url=None):
         """단일 사진의 HTML 생성 — EXIF 방향 보정 + base64 인코딩"""
         import base64, mimetypes, io
 
@@ -3222,6 +3236,12 @@ class TravelBlogGenerator:
                 f'color:#999;font-size:.85em">'
                 f'{caption_text}</p>\n'
             )
+            # 발행용 지도 카드 마커(주석) — 미리보기에는 안 보이고, 발행기가
+            # html_to_blocks에서 map_card 블록으로 변환해 OG 카드 변환을 유도한다.
+            # 본문 텍스트에는 여전히 URL을 노출하지 않는다(불변식 유지).
+            if show_map and gps and map_card_url:
+                safe_display = display.replace("|", "").replace("-->", "")
+                img_html += f'<!--MAPCARD:{map_card_url}|{safe_display}-->\n'
 
         return img_html
 

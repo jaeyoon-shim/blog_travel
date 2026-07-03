@@ -917,3 +917,59 @@ def test_insert_photos_with_map_collages_same_place(tmp_path):
     assert "[PHOTO:" not in out                # 잔존 태그 없음
     assert "오타루 운하" in out                 # 캡션 라인 유지
 
+
+# ── I2: 구글맵 장소 OG 카드 — place_id 보존·MAPCARD 마커 ──
+def test_photo_html_no_marker_without_place_id():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    html = g._photo_html("nope.jpg", "오타루 운하", {"lat": 43.19, "lon": 140.99},
+                          show_map=True, map_card_url=None)
+    assert "MAPCARD" not in html
+    assert "📍 오타루 운하" in html  # 지도 폴백 캡션은 유지
+
+
+def test_photo_html_marker_with_place_id():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    url = "https://www.google.com/maps/place/?q=place_id:ChIJabc123"
+    html = g._photo_html("nope.jpg", "오타루 운하", {"lat": 43.19, "lon": 140.99},
+                          show_map=True, map_card_url=url)
+    assert f"<!--MAPCARD:{url}|오타루 운하-->" in html
+    assert "📍 오타루 운하" in html  # 미리보기용 캡션은 그대로 노출(마커는 주석)
+
+
+def test_insert_photos_with_map_generates_marker_when_place_id(tmp_path):
+    from PIL import Image
+    p1 = tmp_path / "c.jpg"
+    Image.new("RGB", (800, 600), (10, 200, 10)).save(p1, "JPEG")
+    results = [
+        {"file_name": "c.jpg", "file_path": str(p1), "location_name": "오타루 운하",
+         "gps": {"lat": 43.19, "lon": 140.99}, "place_id": "ChIJabc123"},
+    ]
+    content = "<h2>오타루 운하</h2><p>[PHOTO:c.jpg]운하 산책</p>"
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    out = g._insert_photos_with_map(content, results)
+    assert "<!--MAPCARD:https://www.google.com/maps/place/?q=place_id:ChIJabc123|오타루 운하-->" in out
+
+
+def test_html_to_blocks_map_card_marker():
+    from posters import html_to_blocks
+    url = "https://www.google.com/maps/place/?q=place_id:ChIJabc123"
+    html = (f'<figure><img src="file:///x.jpg" alt="오타루 운하"/></figure>'
+            f'<p style="text-align:center;color:#999">📍 오타루 운하</p>'
+            f'<!--MAPCARD:{url}|오타루 운하-->'
+            f'<p>다음 문단 본문</p>')
+    blocks = html_to_blocks(html)
+    cards = [b for b in blocks if b.get("type") == "map_card"]
+    assert len(cards) == 1
+    assert cards[0]["url"] == url
+    assert cards[0]["label"] == "↑↑ 오타루 운하 위치 ↑↑"
+    # 마커 텍스트가 text 블록에 잔존하지 않는다
+    texts = [b.get("content", "") for b in blocks if b.get("type") == "text"]
+    assert not any("MAPCARD" in t for t in texts)
+
+
+def test_html_to_blocks_no_marker_no_map_card():
+    from posters import html_to_blocks
+    html = '<p>일반 본문 텍스트, 지도 카드 없음</p>'
+    blocks = html_to_blocks(html)
+    assert not any(b.get("type") == "map_card" for b in blocks)
+
