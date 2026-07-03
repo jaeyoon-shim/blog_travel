@@ -2618,9 +2618,60 @@ class TravelBlogGenerator:
             new_post, naver_analysis, (post or {}).get("region", ""))
         return new_post
 
+    @staticmethod
+    def _compose_collage(paths, out_dir=None):
+        """같은 장소 사진 2장을 EXIF 방향 보정 후 가로로 이어붙여 콜라주 이미지 생성
+        - 높이 1080px로 정규화(비율 유지) 후 사이 8px 흰 여백을 두고 결합
+        - JPEG q85로 임시파일 저장, 경로 반환
+        - 입력이 2장 미만이거나 파일 오류 시 None (호출부가 단독 삽입으로 폴백)
+        """
+        if not paths or len(paths) < 2:
+            return None
+        try:
+            from PIL import Image, ImageOps
+            import tempfile
+
+            resized = []
+            target_h = 1080
+            for p in paths[:2]:
+                if not p or not os.path.exists(p):
+                    return None
+                with Image.open(p) as src:
+                    img = src
+                    try:
+                        img = ImageOps.exif_transpose(img)
+                    except Exception:
+                        pass
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    w, h = img.size
+                    if h != target_h and h > 0:
+                        new_w = max(1, round(w * target_h / h))
+                        img = img.resize((new_w, target_h), Image.LANCZOS)
+                    else:
+                        img = img.copy()
+                    resized.append(img)
+
+            gap = 8
+            total_w = sum(im.width for im in resized) + gap
+            canvas = Image.new('RGB', (total_w, target_h), (255, 255, 255))
+            x = 0
+            for im in resized:
+                canvas.paste(im, (x, 0))
+                x += im.width + gap
+
+            fd, tmp_path = tempfile.mkstemp(suffix='.jpg', dir=out_dir)
+            os.close(fd)
+            canvas.save(tmp_path, format='JPEG', quality=85)
+            return tmp_path
+        except Exception as e:
+            logger.warning(f"⚠️ 콜라주 합성 실패: {e}")
+            return None
+
     def _insert_photos_with_map(self, content, results):
         """장소 매칭 기반 사진 삽입
-        - 같은 장소 사진 중 마지막에만 지도 1개
+        - 같은 장소 사진 2장은 콜라주로 합성해 한 장으로 삽입(홀수 마지막 1장은 단독)
+        - 같은 장소 중 마지막 청크에만 지도 1개
         - 장소→장소 이동 경로 안내
         """
         inserted = set()
@@ -2634,50 +2685,76 @@ class TravelBlogGenerator:
                 place_groups[loc] = []
             place_groups[loc].append(r)
 
-        # 각 장소의 마지막 사진 파일명 → 지도 표시 대상
-        map_photos = set()
+        # 장소별 렌더 유닛 구성: 2장씩 콜라주 청크(홀수 마지막은 단독), 마지막 청크만 지도 표시
+        units = []
         for loc, photos in place_groups.items():
-            if photos:
-                map_photos.add(photos[-1].get("file_name", ""))
+            chunks = [photos[i:i + 2] for i in range(0, len(photos), 2)]
+            for ci, chunk in enumerate(chunks):
+                is_last_chunk = (ci == len(chunks) - 1)
+                collage_path = None
+                if len(chunk) == 2:
+                    collage_path = self._compose_collage(
+                        [p.get("file_path", "") for p in chunk])
 
-        # 1단계: AI가 넣은 [PHOTO:] 태그 처리
-        for r in results:
-            fn = r.get("file_name", "")
-            tag = f"[PHOTO:{fn}]"
+                if collage_path:
+                    rep = chunk[-1]  # 지도/GPS 대표는 청크의 마지막 사진
+                    units.append({
+                        "photos": chunk,
+                        "fp": collage_path,
+                        "display": self._display_name(rep),
+                        "gps": rep.get("gps"),
+                        "show_map": is_last_chunk,
+                        "file_names": [p.get("file_name", "") for p in chunk],
+                    })
+                else:
+                    for pi, r in enumerate(chunk):
+                        is_last_photo = is_last_chunk and (pi == len(chunk) - 1)
+                        units.append({
+                            "photos": [r],
+                            "fp": r.get("file_path", ""),
+                            "display": self._display_name(r),
+                            "gps": r.get("gps"),
+                            "show_map": is_last_photo,
+                            "file_names": [r.get("file_name", "")],
+                        })
+
+        # 1단계: AI가 넣은 [PHOTO:] 태그 처리 (유닛의 첫 사진 태그 위치에 삽입,
+        # 콜라주로 합쳐진 나머지 태그는 최종 정리 단계에서 제거)
+        for u in units:
+            anchor_fn = u["file_names"][0]
+            tag = f"[PHOTO:{anchor_fn}]"
             if tag in content:
                 html = self._photo_html(
-                    r.get("file_path", ""),
-                    self._display_name(r),
-                    r.get("gps"),
-                    show_map=(fn in map_photos))
+                    u["fp"], u["display"], u["gps"], show_map=u["show_map"])
                 content = content.replace(tag, html, 1)
-                inserted.add(fn)
+                for fn in u["file_names"]:
+                    inserted.add(fn)
+                u["_placed"] = True
+            else:
+                u["_placed"] = False
 
-        # 2단계: 누락 사진 → 장소 매칭으로 <h2> 섹션에 자동 삽입
-        missing = [r for r in results if r.get("file_name", "") not in inserted]
-        if missing:
-            logger.info(f"📸 사진 자동 배치: {len(missing)}/{len(results)}장 추가 삽입")
+        # 2단계: 누락 유닛 → 장소 매칭으로 <h2> 섹션에 자동 삽입
+        missing_units = [u for u in units if not u["_placed"]]
+        if missing_units:
+            missing_photo_cnt = sum(len(u["file_names"]) for u in missing_units)
+            logger.info(f"📸 사진 자동 배치: {missing_photo_cnt}/{len(results)}장 추가 삽입")
 
-            import re as _re
-            h2_pattern = _re.compile(
-                r'(<h2[^>]*>)(.*?)(</h2>)', _re.IGNORECASE | _re.DOTALL)
+            h2_pattern = re.compile(
+                r'(<h2[^>]*>)(.*?)(</h2>)', re.IGNORECASE | re.DOTALL)
             h2_matches = list(h2_pattern.finditer(content))
 
-            for r in missing:
-                fn = r.get("file_name", "")
-                loc = r.get("location_name", "")
+            for u in missing_units:
+                loc = u["photos"][0].get("location_name", "")
+                fns = u["file_names"]
                 html = self._photo_html(
-                    r.get("file_path", ""),
-                    self._display_name(r),
-                    r.get("gps"),
-                    show_map=(fn in map_photos))
+                    u["fp"], u["display"], u["gps"], show_map=u["show_map"])
 
                 placed = False
                 if loc and h2_matches:
                     best_match = None
                     best_score = 0
                     for m in h2_matches:
-                        h2_text = _re.sub(r'<[^>]+>', '', m.group(2)).strip()
+                        h2_text = re.sub(r'<[^>]+>', '', m.group(2)).strip()
                         loc_chars = set(loc.replace(" ", ""))
                         h2_chars = set(h2_text.replace(" ", ""))
                         if not loc_chars: continue
@@ -2707,19 +2784,21 @@ class TravelBlogGenerator:
                         content = content[:insert_pos] + '\n<br/>\n' + html + content[insert_pos:]
                         h2_matches = list(h2_pattern.finditer(content))
                         placed = True
-                        inserted.add(fn)
+                        for fn in fns:
+                            inserted.add(fn)
 
                 if not placed:
-                    inserted.add(fn)
+                    for fn in fns:
+                        inserted.add(fn)
                     for marker in ['<div class="travel-tips">', '<div class="outro">',
                                    '🚆', '여행 꿀팁']:
                         if marker in content:
                             content = content.replace(marker,
-                                f'<h3>📸 {self._display_name(r)}</h3>\n{html}\n{marker}', 1)
+                                f'<h3>📸 {u["display"]}</h3>\n{html}\n{marker}', 1)
                             placed = True
                             break
                     if not placed:
-                        content += f'\n<h3>📸 {self._display_name(r)}</h3>\n{html}'
+                        content += f'\n<h3>📸 {u["display"]}</h3>\n{html}'
 
         # 3단계: 장소→장소 이동 경로 안내 삽입
         content = self._insert_route_guides(content, place_groups)
@@ -2736,7 +2815,7 @@ class TravelBlogGenerator:
         if placed_cnt < total:
             logger.warning(f"⚠️ 사진 {placed_cnt}/{total}장만 삽입됨")
         else:
-            logger.info(f"✅ 사진 {total}장 전체 삽입, 지도 {len(map_photos)}개 (장소당 1개)")
+            logger.info(f"✅ 사진 {total}장 전체 삽입")
         return content
 
     def _fetch_route_data(self, photos, route_modes):
@@ -3133,13 +3212,15 @@ class TravelBlogGenerator:
             f'</figure>\n'
         )
 
-        if gps and show_map:
-            # 구글맵 URL 없이 장소명 텍스트만 표시
-            # (네이버 에디터에서 URL 붙여넣기 시 OG 카드 문제 방지)
+        # 캡션 라인은 항상 출력(가운데 정렬·회색·작은 글씨). 📍 접두는 지도 표시
+        # 대상(show_map)이고 GPS가 있을 때만 붙는다(구글맵 URL은 절대 넣지 않는다 —
+        # 네이버 에디터에서 URL 붙여넣기 시 OG 카드로 변환되는 문제 방지).
+        if display:
+            caption_text = f"📍 {display}" if (gps and show_map) else display
             img_html += (
                 f'<p style="text-align:center;margin:4px 0 20px;'
-                f'color:#8B9467;font-size:.85em">'
-                f'📍 {display}</p>\n'
+                f'color:#999;font-size:.85em">'
+                f'{caption_text}</p>\n'
             )
 
         return img_html

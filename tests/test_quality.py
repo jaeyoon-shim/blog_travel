@@ -860,3 +860,60 @@ def test_plan_dir_unique_untitled():
     assert "여행_" in d and "untitled" not in d      # 자동 이름 부여
     assert app_mod._plan_dir() == d                   # 같은 세션에선 일관(캐시)
     app_mod.state["plan"], app_mod.state["_plan_dir"] = old_plan, old_dir
+
+
+# ── I1: 같은 장소 사진 콜라주 합성 ──
+def test_compose_collage_normalizes_height(tmp_path):
+    from PIL import Image
+    portrait = tmp_path / "portrait.jpg"
+    landscape = tmp_path / "landscape.jpg"
+    Image.new("RGB", (600, 1200), (200, 50, 50)).save(portrait, "JPEG")
+    Image.new("RGB", (1600, 900), (50, 50, 200)).save(landscape, "JPEG")
+
+    out = TravelBlogGenerator._compose_collage([str(portrait), str(landscape)])
+    assert out and os.path.exists(out)
+    with Image.open(out) as collage:
+        collage.load()
+        height, width = collage.height, collage.width
+    assert height == 1080
+    # 콜라주 폭은 두 사진을 각각 1080 높이로 정규화한 폭보다 커야 한다(가로 결합 검증)
+    w1 = round(600 * 1080 / 1200)
+    w2 = round(1600 * 1080 / 900)
+    assert width > w1 and width > w2
+    assert width >= w1 + w2  # 사이 여백 포함
+    os.remove(out)
+
+
+def test_compose_collage_fallback_none():
+    from PIL import Image
+    # 1장만 주면 콜라주 대상이 아니므로 None
+    assert TravelBlogGenerator._compose_collage(["u/only_one.jpg"]) is None
+    # 존재하지 않는 경로는 실패 → None
+    assert TravelBlogGenerator._compose_collage(
+        ["u/nope1.jpg", "u/nope2.jpg"]) is None
+    assert TravelBlogGenerator._compose_collage(None) is None
+    assert TravelBlogGenerator._compose_collage([]) is None
+
+
+def test_insert_photos_with_map_collages_same_place(tmp_path):
+    from PIL import Image
+    p1 = tmp_path / "a.jpg"
+    p2 = tmp_path / "b.jpg"
+    Image.new("RGB", (800, 600), (10, 200, 10)).save(p1, "JPEG")
+    Image.new("RGB", (600, 800), (10, 10, 200)).save(p2, "JPEG")
+
+    results = [
+        {"file_name": "a.jpg", "file_path": str(p1),
+         "location_name": "오타루 운하", "gps": {"lat": 43.19, "lon": 140.99}},
+        {"file_name": "b.jpg", "file_path": str(p2),
+         "location_name": "오타루 운하", "gps": {"lat": 43.19, "lon": 140.99}},
+    ]
+    content = "<h2>오타루 운하</h2><p>[PHOTO:a.jpg]운하 산책[PHOTO:b.jpg]더 걸었다</p>"
+
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)  # API 없이 메서드만
+    out = g._insert_photos_with_map(content, results)
+
+    assert out.count("<figure") == 1          # 2장이 콜라주 1개로 합성
+    assert "[PHOTO:" not in out                # 잔존 태그 없음
+    assert "오타루 운하" in out                 # 캡션 라인 유지
+
