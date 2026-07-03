@@ -2493,6 +2493,62 @@ class TravelBlogGenerator:
             return f"PLACE {counter['n']}"
         return re.sub(r"PLACE N\b", _sub, content)
 
+    @staticmethod
+    def _find_asset_spans(content):
+        """코드 조립물(사진 figure·위키박스·경로카드) 구간 [(start,end)]을 찾는다.
+        div 블록은 중첩이 있어 깊이 카운트로 닫는 지점을 찾는다. 순수함수."""
+        spans = []
+        for m in re.finditer(r'<figure[^>]*>.*?</figure>', content, re.DOTALL | re.IGNORECASE):
+            spans.append((m.start(), m.end()))
+        opener = re.compile(
+            r'<div[^>]*style="[^"]*(?:background:#f7f8f3|linear-gradient)[^"]*"[^>]*>',
+            re.IGNORECASE)
+        for m in opener.finditer(content):
+            depth = 0
+            for t in re.finditer(r'<div\b|</div>', content[m.start():], re.IGNORECASE):
+                depth += 1 if t.group().lower().startswith('<div') else -1
+                if depth == 0:
+                    spans.append((m.start(), m.start() + t.end()))
+                    break
+        spans.sort()
+        merged = []
+        for s, e in spans:
+            if merged and s < merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+            else:
+                merged.append((s, e))
+        return merged
+
+    @staticmethod
+    def _protect_assets(content):
+        """코드 조립물을 [KEEP_n] 토큰으로 치환 → (경량 텍스트, 자산 리스트).
+        AI에게는 텍스트만 주므로 사진/박스/카드를 물리적으로 만질 수 없다."""
+        content = content or ""
+        spans = TravelBlogGenerator._find_asset_spans(content)
+        assets, out, prev = [], [], 0
+        for s, e in spans:
+            out.append(content[prev:s])
+            out.append(f"[KEEP_{len(assets) + 1}]")
+            assets.append(content[s:e])
+            prev = e
+        out.append(content[prev:])
+        return "".join(out), assets
+
+    @staticmethod
+    def _restore_assets(text, assets):
+        """[KEEP_n] 토큰을 원 자산으로 복원. 각 토큰이 정확히 1회씩 없거나
+        미지 토큰이 남으면 None(= revise 거부, 원본 유지)."""
+        if text is None:
+            return None
+        for i in range(len(assets), 0, -1):
+            tok = f"[KEEP_{i}]"
+            if text.count(tok) != 1:
+                return None
+            text = text.replace(tok, assets[i - 1])
+        if re.search(r'\[KEEP_\d+\]', text):
+            return None
+        return text
+
     def _insert_photos_with_map(self, content, results):
         """장소 매칭 기반 사진 삽입
         - 같은 장소 사진 중 마지막에만 지도 1개

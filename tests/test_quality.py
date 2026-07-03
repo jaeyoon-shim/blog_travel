@@ -663,3 +663,37 @@ def test_region_desc_uses_naver_evidence(monkeypatch):
     g._generate_region_desc("기타큐슈")
     user2 = captured["messages"][1]["content"]
     assert "실측 참고" not in user2
+
+
+# ── F2: 피드백 재작성 — 자산 잠금(_protect_assets/_restore_assets) ──
+_ASSET_HTML = (
+    '<p>인트로 문장.</p>'
+    '<div style="background:#f7f8f3;border:1px solid #e3e7d8">위키박스 내용</div>'
+    '<p>본문 A</p>'
+    '<figure style="text-align:center"><img src="data:image/jpeg;base64,AAAA"/></figure>'
+    '<p>본문 B</p>'
+    '<div style="background:linear-gradient(135deg,#eef6ff,#f0f4ff)">'
+    '<div style="font-weight:bold">🚶 이동 A → B</div>'
+    '<div style="color:#6b7280">10분</div></div>'
+    '<p>마무리</p>'
+)
+
+
+def test_protect_restore_roundtrip():
+    text, assets = TravelBlogGenerator._protect_assets(_ASSET_HTML)
+    assert len(assets) == 3                      # 위키박스 + figure + 경로카드
+    assert "base64" not in text                  # 무거운 자산이 텍스트에서 제거됨
+    assert "[KEEP_1]" in text and "[KEEP_3]" in text
+    assert "본문 A" in text and "본문 B" in text  # 본문은 남음
+    restored = TravelBlogGenerator._restore_assets(text, assets)
+    assert restored == _ASSET_HTML               # 무손실 왕복
+
+
+def test_restore_rejects_missing_token():
+    text, assets = TravelBlogGenerator._protect_assets(_ASSET_HTML)
+    # 토큰 삭제 → 거부
+    assert TravelBlogGenerator._restore_assets(text.replace("[KEEP_2]", ""), assets) is None
+    # 토큰 중복 → 거부
+    assert TravelBlogGenerator._restore_assets(text + "[KEEP_1]", assets) is None
+    # None 입력 안전
+    assert TravelBlogGenerator._restore_assets(None, assets) is None
