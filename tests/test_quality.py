@@ -787,3 +787,16 @@ def test_revise_draft_llm_wiring(monkeypatch):
             message=types.SimpleNamespace(content="토큰 다 날린 응답"))])
     monkeypatch.setattr(g.client.chat.completions, "create", bad_create)
     assert g.revise_draft(post, "피드백", None) is None
+
+
+# ── G1: 초안 파일 저장/복원 (app.py) ──
+def test_drafts_save_load_roundtrip(tmp_path, monkeypatch):
+    import app as app_mod
+    monkeypatch.setitem(app_mod.state, "plan", {"trip_title": "테스트 여행"})
+    monkeypatch.setattr(app_mod, "_plan_dir", lambda: str(tmp_path))
+    app_mod.state["group_states"] = {0: {"drafts": [{"title": "t", "content": "<p>c</p>", "tags": ["a"]}]}}
+    app_mod._save_drafts(0)
+    app_mod.state["group_states"] = {}
+    loaded = app_mod._load_saved_drafts(0)
+    assert loaded and loaded[0]["title"] == "t"
+    assert app_mod._load_saved_drafts(99) is None   # 없는 그룹 → None

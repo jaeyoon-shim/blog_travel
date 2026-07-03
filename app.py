@@ -308,6 +308,7 @@ def api_status():
         "group_count": len(_active_groups()),
         "has_plan": bool((state.get("plan") or {}).get("days")),
         "has_drafts": any(gs.get("drafts") for gs in state.get("group_states", {}).values()),
+        "has_saved_drafts": os.path.isdir(os.path.join(_plan_dir(), "drafts")) if state.get("plan") else False,
         "progress": state["progress"],
     })
 
@@ -462,6 +463,33 @@ def _save_plan():
             json.dump(state["plan"], f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.warning(f"plan 저장 실패: {e}")
+
+
+def _save_drafts(gi):
+    """생성/재작성된 초안을 plan 폴더에 영구 저장 (서버 재시작 대비). 실패는 로그만."""
+    try:
+        drafts = state["group_states"].get(gi, {}).get("drafts")
+        if not drafts:
+            return
+        d = os.path.join(_plan_dir(), "drafts")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"group_{gi}.json"), "w", encoding="utf-8") as f:
+            json.dump(drafts, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"초안 저장 실패(무시): {e}")
+
+
+def _load_saved_drafts(gi):
+    """저장된 초안 파일 로드. 없으면 None."""
+    try:
+        p = os.path.join(_plan_dir(), "drafts", f"group_{gi}.json")
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"초안 로드 실패(무시): {e}")
+    return None
+
 
 @app.route('/api/plan/draft', methods=['POST'])
 def api_plan_draft():
@@ -723,6 +751,7 @@ def api_generate():
                 selected_structure=structure, route_modes=route_modes,
                 progress_cb=lambda m: state["progress"].update({"message":m}))
             state["group_states"].setdefault(gi,{})["drafts"] = dr
+            _save_drafts(gi)
             state["completed"].add(3)
             state["progress"] = {"status":"done","message":f"✅ {len(dr)}개 초안 완료","percent":100}
         except Exception as e:
@@ -770,6 +799,7 @@ def api_generate_all():
                     progress_cb=lambda m,_gi=gi: state["progress"].update(
                         {"message":f"[{_gi+1}/{total}] {m}"}))
                 state["group_states"].setdefault(gi,{})["drafts"] = dr
+                _save_drafts(gi)
             state["completed"].add(3)
             state["progress"] = {"status":"done","message":f"✅ 전체 {total}개 그룹 완료","percent":100}
         except Exception as e:
@@ -798,6 +828,7 @@ def api_revise():
                 drafts[di], feedback, state.get("naver_analysis"))
             if new_post:
                 drafts[di] = new_post
+                _save_drafts(gi)
                 state["progress"] = {"status": "done", "message": "✅ 최종본 재작성 완료", "percent": 100}
             else:
                 state["progress"] = {"status": "error",
@@ -809,9 +840,24 @@ def api_revise():
 
 
 # ── 초안/블록 ──
+@app.route('/api/drafts/save', methods=['POST'])
+def api_drafts_save():
+    saved = []
+    for gi, gs in state["group_states"].items():
+        if gs.get("drafts"):
+            _save_drafts(gi)
+            saved.append(gi)
+    return jsonify({"saved_groups": saved})
+
+
 @app.route('/api/drafts/<int:gi>')
 def api_drafts(gi):
     gs = state["group_states"].get(gi,{})
+    if not gs.get("drafts"):
+        saved = _load_saved_drafts(gi)
+        if saved:
+            state["group_states"].setdefault(gi, {})["drafts"] = saved
+            gs = state["group_states"][gi]
     return jsonify([{"title":d.get("title",""),"content":d.get("content",""),
         "tags":d.get("tags",[]),"meta_description":d.get("meta_description",""),
         "hashtags":d.get("hashtags",[]),
@@ -821,11 +867,18 @@ def api_drafts(gi):
 @app.route('/api/blocks/<int:gi>/<int:di>')
 def api_blocks(gi, di):
     gs = state["group_states"].get(gi,{})
+    if not gs.get("drafts"):
+        saved = _load_saved_drafts(gi)
+        if saved:
+            state["group_states"].setdefault(gi, {})["drafts"] = saved
+            gs = state["group_states"][gi]
     drafts = gs.get("drafts",[])
     if di >= len(drafts): return jsonify({"error":"잘못된 인덱스"}), 400
     d = drafts[di]
     groups = _active_groups()
     photos = groups[gi].get("photos", []) if gi < len(groups) else []
+    if not photos:
+        photos = d.get("photo_results", [])   # 서버 재시작 후 복원 경로(base64 이미지 매칭용)
     blocks = html_to_blocks(d.get("content",""), photos)
     return jsonify({"title":d.get("title",""),"tags":d.get("tags",[]),"blocks":blocks})
 
