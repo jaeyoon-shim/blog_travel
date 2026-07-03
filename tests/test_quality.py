@@ -697,3 +697,32 @@ def test_restore_rejects_missing_token():
     assert TravelBlogGenerator._restore_assets(text + "[KEEP_1]", assets) is None
     # None 입력 안전
     assert TravelBlogGenerator._restore_assets(None, assets) is None
+
+
+# ── F2: 피드백 재작성 — revise_draft LLM 연동 ──
+def test_revise_draft_llm_wiring(monkeypatch):
+    import types
+    g = TravelBlogGenerator(Config())
+    captured = {}
+    def fake_create(**k):
+        captured["prompt"] = k["messages"][0]["content"]
+        # AI가 본문만 고치고 KEEP 토큰은 유지한 응답을 모사
+        text, _ = TravelBlogGenerator._protect_assets(_ASSET_HTML)
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=text.replace("본문 A", "더 감성적인 본문 A")))])
+    monkeypatch.setattr(g.client.chat.completions, "create", fake_create)
+    post = {"content": _ASSET_HTML, "tags": ["기타큐슈"], "title": "제목"}
+    out = g.revise_draft(post, "더 감성적으로", None)
+    assert out is not None
+    assert "더 감성적인 본문 A" in out["content"]
+    assert "base64,AAAA" in out["content"]            # 자산 복원됨
+    assert "피드백" in captured["prompt"] and "더 감성적으로" in captured["prompt"]
+    assert "KEEP" in captured["prompt"]               # 토큰 유지 규칙 포함
+    # 빈 피드백 → None
+    assert g.revise_draft(post, "  ", None) is None
+    # AI가 토큰을 삭제한 응답 → None (원본 무손상)
+    def bad_create(**k):
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content="토큰 다 날린 응답"))])
+    monkeypatch.setattr(g.client.chat.completions, "create", bad_create)
+    assert g.revise_draft(post, "피드백", None) is None

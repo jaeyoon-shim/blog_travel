@@ -1961,6 +1961,7 @@ class TravelBlogGenerator:
                 post["region_desc"] = region_desc
                 post["course_line"] = course_line
                 post["group_label"] = group_label
+                post["region"] = region
                 post["photo_results"] = photos
                 # SEO 강제·검증 (E): 핵심 태그 병합 + 경고 부착
                 post["tags"] = self.merge_tags(post.get("tags"), self.extract_core_tags(naver_analysis, region))
@@ -2548,6 +2549,49 @@ class TravelBlogGenerator:
         if re.search(r'\[KEEP_\d+\]', text):
             return None
         return text
+
+    def revise_draft(self, post, feedback, naver_analysis=None):
+        """가안 + 자연어 피드백 → 최종본 post 재작성. 실패 시 None(원본 무손상).
+        코드 조립물은 [KEEP_n]으로 잠가 AI가 만질 수 없다(형식은 코드 불변식)."""
+        feedback = (feedback or "").strip()
+        content = (post or {}).get("content") or ""
+        if not feedback or not content:
+            return None
+        text, assets = self._protect_assets(content)
+        prompt = (
+            "아래는 여행 블로그 글(HTML 조각)이다. 사용자 피드백을 반영해 수정하라.\n"
+            "[규칙]\n"
+            "1. 피드백에 해당하는 부분만 고치고, 나머지 문장·HTML 태그·구조는 그대로 유지한다.\n"
+            "2. [KEEP_숫자] 토큰은 절대 추가/삭제/수정하지 않는다 — 원래 자리에 그대로 둔다.\n"
+            "3. 구글맵/이동경로/URL/이미지 태그를 새로 넣지 않는다 (코드가 자동 삽입).\n"
+            "4. 수정된 글 전체를 그대로 출력한다. 설명·코드펜스 금지.\n\n"
+            f"[사용자 피드백]\n{feedback}\n\n[글]\n{text}"
+        )
+        try:
+            r = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4, max_tokens=self.max_tok,
+            )
+            out = (r.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.warning(f"⚠️ 피드백 재작성 LLM 실패: {e}")
+            return None
+        if out.startswith("```"):
+            out = re.sub(r'^```[a-zA-Z]*\n?', '', out)
+            out = re.sub(r'\n?```$', '', out).strip()
+        restored = self._restore_assets(out, assets)
+        if not restored:
+            logger.warning("⚠️ 피드백 재작성 거부: KEEP 토큰 결손/중복 — 원본 유지")
+            return None
+        if out.count("http") > text.count("http"):
+            logger.warning("⚠️ 피드백 재작성 거부: 신규 URL 유입 — 원본 유지")
+            return None
+        new_post = dict(post)
+        new_post["content"] = self._number_places(restored)
+        new_post["seo_warnings"] = self.seo_check(
+            new_post, naver_analysis, (post or {}).get("region", ""))
+        return new_post
 
     def _insert_photos_with_map(self, content, results):
         """장소 매칭 기반 사진 삽입
