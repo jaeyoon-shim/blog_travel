@@ -116,11 +116,28 @@ def save_settings():
         logger.warning(f"설정 저장 실패: {e}")
 
 
+def _load_last_plan():
+    """서버 시작 시 가장 최근 계획(plan.json) 자동 복원.
+    재시작 후 _plan_dir()가 올바른 폴더를 보게 해 저장된 초안 복원이 동작한다."""
+    try:
+        cands = list(Path("plans").glob("*/plan.json"))
+        if not cands:
+            return
+        latest = max(cands, key=lambda p: p.stat().st_mtime)
+        with open(latest, encoding="utf-8") as f:
+            state["plan"] = json.load(f)
+        state["_plan_dir"] = str(latest.parent)
+        logger.info(f"📂 이전 계획 자동 복원: {latest}")
+    except Exception as e:
+        logger.warning(f"계획 자동 복원 실패(무시): {e}")
+
+
 def init_engine():
     load_settings()
     state["cfg"] = Config()
     state["analyzer"] = PhotoAnalyzer(state["cfg"])
     state["generator"] = TravelBlogGenerator(state["cfg"])
+    _load_last_plan()
 
 
 def blocks_to_html(blocks):
@@ -503,6 +520,8 @@ def api_plan_draft():
     free_mode = _is_free_mode()
     _old_plan = state.get("plan")
     state["plan"] = TripPlanner.build_draft(state["photo_results"], free_mode=free_mode)
+    if data.get("title"):
+        state["plan"]["trip_title"] = data["title"]
     if state["receipts"]:
         TripPlanner.match_receipts_to_stops(state["plan"], state["receipts"])
     if _old_plan and _old_plan.get("days"):
