@@ -615,7 +615,18 @@ def api_projects_new():
                   "selected_groups": [], "group_states": {}, "naver_analysis": None,
                   "style_analysis": None, "plan": None, "receipts": [],
                   "published_gis": set(), "completed": set(), "_plan_dir": None})
-    return jsonify({"ok": True})
+    # 새 프로젝트 폴더를 즉시 생성 — 셀렉터 목록에 바로 보이고 current로 등록
+    # (안 만들면 "새 여행 추가가 안 된다"로 보임 + 셀렉터가 이전 여행을 표시해 혼란)
+    name = "여행_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    d = os.path.join("plans", name)
+    try:
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "project.json"), "w", encoding="utf-8") as f:
+            json.dump({"saved_at": datetime.now().isoformat(timespec="seconds")}, f, ensure_ascii=False)
+        state["_plan_dir"] = d
+    except Exception as e:
+        logger.warning(f"새 프로젝트 폴더 생성 실패(무시): {e}")
+    return jsonify({"ok": True, "folder": name})
 
 
 @app.route('/api/plan/draft', methods=['POST'])
