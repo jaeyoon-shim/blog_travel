@@ -70,6 +70,7 @@ state = {
     "settings": dict(DEFAULT_SETTINGS),
     "plan": None,
     "receipts": [],
+    "published_gis": set(),
 }
 
 
@@ -117,19 +118,16 @@ def save_settings():
 
 
 def _load_last_plan():
-    """서버 시작 시 가장 최근 계획(plan.json) 자동 복원.
-    재시작 후 _plan_dir()가 올바른 폴더를 보게 해 저장된 초안 복원이 동작한다."""
+    """서버 시작 시 가장 최근 프로젝트 자동 복원(plan+분석결과+발행기록)."""
     try:
-        cands = list(Path("plans").glob("*/plan.json"))
+        cands = list(Path("plans").glob("*/plan.json")) + list(Path("plans").glob("*/project.json"))
         if not cands:
             return
         latest = max(cands, key=lambda p: p.stat().st_mtime)
-        with open(latest, encoding="utf-8") as f:
-            state["plan"] = json.load(f)
-        state["_plan_dir"] = str(latest.parent)
-        logger.info(f"📂 이전 계획 자동 복원: {latest}")
+        if _load_project_data(str(latest.parent)):
+            logger.info(f"📂 이전 프로젝트 자동 복원: {latest.parent}")
     except Exception as e:
-        logger.warning(f"계획 자동 복원 실패(무시): {e}")
+        logger.warning(f"프로젝트 자동 복원 실패(무시): {e}")
 
 
 def init_engine():
@@ -327,6 +325,8 @@ def api_status():
         "has_drafts": any(gs.get("drafts") for gs in state.get("group_states", {}).values()),
         "has_saved_drafts": os.path.isdir(os.path.join(_plan_dir(), "drafts")) if state.get("plan") else False,
         "progress": state["progress"],
+        "published_gis": sorted(state.get("published_gis") or []),
+        "project": os.path.basename(state.get("_plan_dir") or ""),
     })
 
 
@@ -373,6 +373,7 @@ def api_analyze():
             state["selected_groups"] = state["trip_structure"].get("by_place", [])
             state["group_states"] = {}
             state["completed"].add(1)
+            _save_project()
             state["progress"] = {"status": "done", "message": f"✅ {len(results)}장 분석 완료", "percent": 100}
         except Exception as e:
             state["progress"] = {"status": "error", "message": f"❌ {e}", "percent": 0}
@@ -461,9 +462,17 @@ def _is_free_mode():
 
 
 def _plan_dir():
-    title = (state.get("plan") or {}).get("trip_title", "") or "untitled"
-    safe = "".join(c for c in title if c.isalnum() or c in " _-").strip() or "untitled"
-    return os.path.join("plans", safe)
+    """현재 프로젝트 폴더. 제목이 없으면 '여행_YYYYMMDD_HHMM' 자동 부여(untitled 충돌 방지).
+    한 세션 안에서는 state['_plan_dir'] 캐시로 일관성 유지(제목 생기면 _save_plan이 리네임)."""
+    title = (state.get("plan") or {}).get("trip_title", "") or ""
+    safe = "".join(c for c in title if c.isalnum() or c in " _-").strip()
+    if safe:
+        return os.path.join("plans", safe)
+    if state.get("_plan_dir"):
+        return state["_plan_dir"]
+    name = "여행_" + datetime.now().strftime("%Y%m%d_%H%M")
+    state["_plan_dir"] = os.path.join("plans", name)
+    return state["_plan_dir"]
 
 def _save_plan():
     if not state.get("plan"):
@@ -478,6 +487,7 @@ def _save_plan():
         state["_plan_dir"] = new_dir
         with open(os.path.join(new_dir, "plan.json"), "w", encoding="utf-8") as f:
             json.dump(state["plan"], f, ensure_ascii=False, indent=2)
+        _save_project()
     except Exception as e:
         logger.warning(f"plan 저장 실패: {e}")
 
@@ -506,6 +516,106 @@ def _load_saved_drafts(gi):
     except Exception as e:
         logger.warning(f"초안 로드 실패(무시): {e}")
     return None
+
+
+_SESSION_KEYS = ["photo_paths", "photo_results", "naver_analysis",
+                 "style_analysis", "receipts"]
+
+
+def _save_project():
+    """현재 세션(분석 결과·SEO·문체·영수증·발행기록)을 project.json으로 저장 — 여행=프로젝트."""
+    if not (state.get("plan") or state.get("photo_results")):
+        return
+    try:
+        d = _plan_dir()
+        os.makedirs(d, exist_ok=True)
+        snap = {k: state.get(k) for k in _SESSION_KEYS}
+        snap["published_gis"] = sorted(state.get("published_gis") or [])
+        snap["completed"] = sorted(state.get("completed") or [])
+        snap["saved_at"] = datetime.now().isoformat(timespec="seconds")
+        with open(os.path.join(d, "project.json"), "w", encoding="utf-8") as f:
+            json.dump(snap, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"프로젝트 저장 실패(무시): {e}")
+
+
+def _load_project_data(folder):
+    """plans/<folder>의 plan.json+project.json을 state로 스왑. 성공 시 True."""
+    try:
+        pj = os.path.join(folder, "plan.json")
+        if os.path.exists(pj):
+            with open(pj, encoding="utf-8") as f:
+                state["plan"] = json.load(f)
+        prj = os.path.join(folder, "project.json")
+        if os.path.exists(prj):
+            with open(prj, encoding="utf-8") as f:
+                snap = json.load(f)
+            for k in _SESSION_KEYS:
+                if k in snap:
+                    state[k] = snap[k]
+            state["published_gis"] = set(snap.get("published_gis") or [])
+            state["completed"] = set(snap.get("completed") or [])
+        state["group_states"] = {}   # 초안은 drafts/ 파일 복원 훅이 처리
+        state["_plan_dir"] = folder
+        return os.path.exists(pj) or os.path.exists(prj)
+    except Exception as e:
+        logger.warning(f"프로젝트 로드 실패(무시): {e}")
+        return False
+
+
+# ── 프로젝트 (여행 = 독립 프로젝트) ──
+@app.route('/api/projects')
+def api_projects():
+    items = []
+    try:
+        for d in Path("plans").iterdir():
+            if not d.is_dir():
+                continue
+            pj = d / "plan.json"
+            info = {"folder": d.name, "trip_title": "", "region": "", "days": 0,
+                    "saved_at": "", "has_drafts": (d / "drafts").is_dir()}
+            if pj.exists():
+                try:
+                    p = json.loads(pj.read_text(encoding="utf-8"))
+                    info.update({"trip_title": p.get("trip_title", ""),
+                                 "region": p.get("region", ""),
+                                 "days": len(p.get("days", []))})
+                except Exception:
+                    pass
+            prj = d / "project.json"
+            if prj.exists():
+                try:
+                    info["saved_at"] = json.loads(prj.read_text(encoding="utf-8")).get("saved_at", "")
+                except Exception:
+                    pass
+            items.append(info)
+    except FileNotFoundError:
+        pass
+    items.sort(key=lambda x: x["saved_at"], reverse=True)
+    cur = state.get("_plan_dir") or ""
+    return jsonify({"projects": items, "current": os.path.basename(cur) if cur else ""})
+
+
+@app.route('/api/projects/open', methods=['POST'])
+def api_projects_open():
+    folder = (request.json or {}).get("folder", "")
+    target = os.path.join("plans", os.path.basename(folder))
+    if not os.path.isdir(target):
+        return jsonify({"error": "프로젝트 없음"}), 404
+    _save_project()   # 현재 작업 먼저 저장 — 유실 없음
+    if not _load_project_data(target):
+        return jsonify({"error": "로드 실패 — 현재 세션 유지"}), 500
+    return jsonify({"ok": True, "folder": os.path.basename(target)})
+
+
+@app.route('/api/projects/new', methods=['POST'])
+def api_projects_new():
+    _save_project()   # 현재 작업 먼저 저장
+    state.update({"photo_paths": [], "photo_results": [], "trip_structure": None,
+                  "selected_groups": [], "group_states": {}, "naver_analysis": None,
+                  "style_analysis": None, "plan": None, "receipts": [],
+                  "published_gis": set(), "completed": set(), "_plan_dir": None})
+    return jsonify({"ok": True})
 
 
 @app.route('/api/plan/draft', methods=['POST'])
@@ -942,6 +1052,10 @@ def api_publish():
             result = poster.post(post_data, method=method, visibility=visibility)
             if result.get("success"):
                 url = result.get("url","")
+                _gi = data.get("gi")
+                if _gi is not None:
+                    state["published_gis"].add(int(_gi))
+                _save_project()
                 state["progress"] = {"status":"done",
                     "message":f"✅ 발행 완료!{' URL: '+url if url else ''}","percent":100}
             else:
@@ -987,6 +1101,10 @@ def api_publish_all():
                 time.sleep(5)  # 스팸 방지
             # 실패를 무시하고 "완료"로 보고하던 버그 수정 — 결과 기반 요약
             status, msg = summarize_publish_results(results, titles)
+            for _i, _r in enumerate(results):
+                if (_r or {}).get("success"):
+                    state["published_gis"].add(_i)
+            _save_project()
             state["progress"] = {"status":status,"message":msg,
                                  "percent":100 if status=="done" else 0}
         except Exception as e:

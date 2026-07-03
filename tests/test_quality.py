@@ -822,3 +822,41 @@ def test_plan_draft_resets_session(monkeypatch, tmp_path):
     assert app_mod.state["group_states"] == {}          # 이전 초안 메모리 제거
     assert app_mod.state["naver_analysis"] is None       # 이전 지역 SEO 근거 제거
     assert not d.exists()                                 # 이전 초안 파일 제거
+
+
+# ── H1: 여행=프로젝트 저장/로드 (app.py) ──
+def test_project_save_load_roundtrip(monkeypatch, tmp_path):
+    import app as app_mod
+    monkeypatch.setattr(app_mod, "_plan_dir", lambda: str(tmp_path))
+    app_mod.state.update({
+        "photo_paths": ["uploads/a.jpg"],
+        "photo_results": [{"file_name": "a.jpg", "gps": {"lat": 1, "lon": 2}}],
+        "naver_analysis": {"keyword": "오사카 여행"},
+        "style_analysis": {"tone": "친근"},
+        "receipts": [{"store_name": "가게"}],
+        "published_gis": {0},
+        "completed": {1, 2},
+    })
+    app_mod._save_project()
+    assert (tmp_path / "project.json").exists()
+    # 세션 클리어 후 로드 복원
+    app_mod.state.update({"photo_paths": [], "photo_results": [], "naver_analysis": None,
+                          "style_analysis": None, "receipts": [], "published_gis": set(),
+                          "completed": set()})
+    ok = app_mod._load_project_data(str(tmp_path))
+    assert ok
+    assert app_mod.state["photo_results"][0]["file_name"] == "a.jpg"
+    assert app_mod.state["naver_analysis"]["keyword"] == "오사카 여행"
+    assert app_mod.state["published_gis"] == {0}
+    assert app_mod.state["completed"] == {1, 2}
+
+
+def test_plan_dir_unique_untitled():
+    import app as app_mod
+    old_plan, old_dir = app_mod.state.get("plan"), app_mod.state.get("_plan_dir")
+    app_mod.state["plan"] = {"trip_title": ""}
+    app_mod.state["_plan_dir"] = None
+    d = app_mod._plan_dir()
+    assert "여행_" in d and "untitled" not in d      # 자동 이름 부여
+    assert app_mod._plan_dir() == d                   # 같은 세션에선 일관(캐시)
+    app_mod.state["plan"], app_mod.state["_plan_dir"] = old_plan, old_dir
