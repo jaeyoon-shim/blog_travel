@@ -601,6 +601,34 @@ def test_seo_check_warnings():
     assert TravelBlogGenerator.seo_check(post, None, "후쿠오카") == []
 
 
+def test_optimize_title_pick_and_fallback(monkeypatch):
+    import types, json as _json
+    g = TravelBlogGenerator(Config())
+    na = {"top_titles": ["기타큐슈 여행 코스 총정리", "기타큐슈 맛집 BEST 5"],
+          "common_keywords": ["라멘", "맛집"], "avg_title_length": 20}
+    post = {"title": "고요한 신성함의 기록", "content": "<p>" + "본문" * 200 + "</p>"}
+    captured = {}
+    def fake_create(**k):
+        captured["prompt"] = k["messages"][0]["content"]
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=_json.dumps({"titles": [
+                "너무길다" * 20,                      # 45자 초과 → 탈락
+                "감성 여행기",                        # 지역명 없음 → 탈락
+                "기타큐슈 라멘 여행 코스 총정리"]})))])  # 통과 → 채택
+    monkeypatch.setattr(g.client.chat.completions, "create", fake_create)
+    t = g.optimize_title(post, na, "기타큐슈")
+    assert t == "기타큐슈 라멘 여행 코스 총정리"
+    assert "기타큐슈 여행 코스 총정리" in captured["prompt"]   # 실측 상위 제목이 근거로 포함
+    # 전부 탈락 → None (기존 제목 유지용)
+    def all_bad(**k):
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=_json.dumps({"titles": ["지역명없는제목"]})))])
+    monkeypatch.setattr(g.client.chat.completions, "create", all_bad)
+    assert g.optimize_title(post, na, "기타큐슈") is None
+    # 분석 없음 → None (호출 안 함)
+    assert g.optimize_title(post, None, "기타큐슈") is None
+
+
 def test_naver_context_no_map_directive():
     na = {"keyword": "후쿠오카 여행", "top_titles": ["t1"], "common_keywords": ["라멘"],
           "avg_analysis": {"avg_chars": 4000, "avg_images": 15, "avg_videos": 0,

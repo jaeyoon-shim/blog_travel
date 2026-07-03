@@ -1967,6 +1967,11 @@ class TravelBlogGenerator:
                 post["photo_results"] = photos
                 # SEO 강제·검증 (E): 핵심 태그 병합 + 경고 부착
                 post["tags"] = self.merge_tags(post.get("tags"), self.extract_core_tags(naver_analysis, region))
+                # 제목 최적화 (G6) — 실측 상위 제목 패턴 기반, 노출 관련은 코드가 강제
+                best_title = self.optimize_title(post, naver_analysis, region)
+                if best_title:
+                    post["original_title"] = post.get("title", "")
+                    post["title"] = best_title
                 post["seo_warnings"] = self.seo_check(post, naver_analysis, region)
                 drafts.append(post)
             time.sleep(1)
@@ -3398,6 +3403,44 @@ class TravelBlogGenerator:
             if not any(region in str(t) for t in tags):
                 warns.append(f"태그에 지역명 '{region}' 부재")
         return warns
+
+    def optimize_title(self, post, naver_analysis, region):
+        """네이버 상위 실측 제목 패턴 기반 제목 최적화. 노출 관련은 코드가 강제:
+        후보 3개 생성 → (지역명 포함 AND 15~45자) 첫 통과 후보 채택.
+        분석 없음/전부 탈락/LLM 실패 → None (기존 제목 유지, seo_check가 경고)."""
+        na = naver_analysis or {}
+        top_titles = [t for t in (na.get("top_titles") or []) if t][:10]
+        region = (region or "").strip()
+        if not top_titles or not region:
+            return None
+        kws = [k for k in (na.get("common_keywords") or []) if k][:8]
+        body = re.sub(r'<[^>]+>', ' ', (post or {}).get("content", "") or "")[:800]
+        prompt = (
+            f"'{region}' 여행 블로그 글의 검색 노출용 제목을 만들어라.\n"
+            "[실측 — 이 키워드로 네이버 상위에 노출된 실제 제목들]\n"
+            + "\n".join(f"- {t}" for t in top_titles)
+            + (f"\n[연관 키워드] {', '.join(kws)}" if kws else "")
+            + f"\n[글 내용 요약]\n{body}\n\n"
+            "[규칙] 상위 제목들의 구조·키워드 배치·길이 패턴을 모방하되 그대로 베끼지 말 것. "
+            f"'{region}'을(를) 반드시 포함. 낚시·과장·이모지 금지. 글 내용에 실제로 있는 것만. "
+            '서로 다른 제목 후보 3개를 JSON으로만: {"titles":["...","...","..."]}'
+        )
+        try:
+            r = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.5, max_tokens=300,
+            )
+            cands = (json.loads(r.choices[0].message.content).get("titles") or [])
+        except Exception as e:
+            logger.warning(f"⚠️ 제목 최적화 실패(기존 제목 유지): {e}")
+            return None
+        for c in cands:
+            c = str(c).strip()
+            if region in c and 15 <= len(c) <= 45:
+                return c
+        return None
 
     def _naver_context(self, na):
         if not na or not na.get("top_titles"): return ""
