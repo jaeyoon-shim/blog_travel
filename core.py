@@ -2410,6 +2410,17 @@ class TravelBlogGenerator:
 
 9. 정확성: 데이터에 없는 구체적 사실(가격 등) 지어내지 않기
 
+10. ★★★ 추천 대상 문장 ★★★
+   - 각 장소 소개에 "어떤 사람에게 추천하는지" 문장을 1개 자연스럽게 포함하라
+     (예: "혼자 조용히 여행하는 사람에게 특히 추천한다")
+
+11. ★★★ 실용 정보는 근거 있는 것만 ★★★
+   - 가격·영업시간 등 실용 정보는 장소별 지시·영수증·실측 참고 자료에 명시된 것만 서술하라.
+     자료에 없는 숫자·시간을 지어내지 말 것
+
+12. ★★★ 짧은 단락 리듬 ★★★
+   - 한 단락은 2~4문장으로 짧게 끊어라. 각 장소는 경험담 → 실용정보 → 추천 순으로 전개하라
+
 [JSON 응답]
 {{"title":"제목 30~50자","content":"HTML본문","meta_description":"150자","tags":["태그x7"],"hashtags":["#해시x5"]}}"""
 
@@ -2824,6 +2835,9 @@ class TravelBlogGenerator:
         # 연속된 구분선(─) 문단 중복 제거 → 1개로 정규화
         content = self._dedupe_separators(content)
 
+        # 인트로 코스 요약 한 줄(코드 조립 — AI 미개입, 순서 왜곡/환각 방지)
+        content = self._insert_course_summary(content, results)
+
         total = len(results)
         placed_cnt = len(inserted)
         if placed_cnt < total:
@@ -2831,6 +2845,38 @@ class TravelBlogGenerator:
         else:
             logger.info(f"✅ 사진 {total}장 전체 삽입")
         return content
+
+    @staticmethod
+    def _insert_course_summary(content, results):
+        """방문 순서 그대로 'A → B → C' 코스 요약 한 줄을 첫 <h2> 직전(없으면 본문 맨 앞)에 삽입.
+        AI에게 맡기지 않고 코드가 조립(순서 왜곡·환각 방지). URL 없음. 순수함수.
+        장소가 8개 초과면 사진 수 상위 8개만 남기되 원래 방문 순서는 유지한다."""
+        if not content or not results:
+            return content or ""
+        from collections import OrderedDict
+        counts = OrderedDict()
+        for r in results:
+            loc = (r.get("location_name") or "").strip()
+            if not loc or loc == "미확인":
+                continue
+            counts[loc] = counts.get(loc, 0) + 1
+
+        names = list(counts.keys())
+        if len(names) > 8:
+            top8 = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:8]
+            top_names = {n for n, _ in top8}
+            names = [n for n in names if n in top_names]
+
+        if len(names) < 2:
+            return content
+
+        summary = " → ".join(names)
+        html = f'<p style="text-align:center;margin:16px 0;color:#666">🚶 {summary}</p>'
+
+        m = re.search(r'<h2', content, re.IGNORECASE)
+        if m:
+            return content[:m.start()] + html + '\n' + content[m.start():]
+        return html + '\n' + content
 
     def _fetch_route_data(self, photos, route_modes):
         """장소→장소 구간별 Google Directions API로 경로 정보 조회

@@ -973,3 +973,75 @@ def test_html_to_blocks_no_marker_no_map_card():
     blocks = html_to_blocks(html)
     assert not any(b.get("type") == "map_card" for b in blocks)
 
+
+# ── I3·I4: 실용정보/추천대상 프롬프트 규칙 + 인트로 코스 요약 코드조립 ──
+def test_prompt_has_recommend_and_practical_info_rules():
+    g = TravelBlogGenerator(Config())
+    photos = [{"location_name": "고쿠라 성", "file_name": "a.jpg",
+               "gps": {"lat": 33.88, "lon": 130.87}}]
+    style = {"name": "감성", "desc": "감성적"}
+    p = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "")
+    assert "추천하는지" in p
+    assert "지어내지 말 것" in p
+    assert "경험담" in p and "추천 순" in p
+    # 기존 URL/구글맵 금지 규칙이 약화·삭제되지 않았는지 회귀 확인
+    assert "구글맵/이동경로 HTML을 절대 넣지 마세요" in p
+
+
+def test_insert_course_summary_order_and_position():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    results = [
+        {"location_name": "A"},
+        {"location_name": "B"},
+        {"location_name": "C"},
+    ]
+    content = "<div>인트로</div><h2>A</h2><p>본문</p>"
+    out = g._insert_course_summary(content, results)
+    assert "A → B → C" in out
+    # <h2> 직전에 삽입되어야 한다
+    idx_summary = out.index("A → B → C")
+    idx_h2 = out.index("<h2>A</h2>")
+    assert idx_summary < idx_h2
+    assert "🚶" in out
+
+
+def test_insert_course_summary_truncates_to_top8_keeps_order():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    # 방문 순서: P1..P10. 사진 수는 서로 달라(중복 없음) 상위8/하위2 경계가 명확하다.
+    # 최저 2곳(P3=2장, P5=1장)이 제외되고, 나머지 8곳은 사진수 순이 아니라 "방문 순서"로 남아야 한다.
+    photo_counts = {"P1": 3, "P2": 9, "P3": 2, "P4": 8, "P5": 1,
+                    "P6": 7, "P7": 6, "P8": 5, "P9": 4, "P10": 10}
+    results = []
+    for name, cnt in photo_counts.items():
+        results.extend([{"location_name": name}] * cnt)
+    content = "<h2>인트로</h2>"
+    out = g._insert_course_summary(content, results)
+    expected = "P1 → P2 → P4 → P6 → P7 → P8 → P9 → P10"
+    assert expected in out
+    assert "P3 →" not in out and "→ P3" not in out
+    assert "P5 →" not in out and "→ P5" not in out
+
+
+def test_insert_course_summary_single_place_not_inserted():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    results = [{"location_name": "혼자장소"}, {"location_name": "미확인"}]
+    content = "<h2>혼자장소</h2>"
+    out = g._insert_course_summary(content, results)
+    assert out == content
+    assert "🚶" not in out
+
+
+def test_insert_course_summary_excludes_unconfirmed():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    results = [
+        {"location_name": "미확인"},
+        {"location_name": "A"},
+        {"location_name": ""},
+        {"location_name": "B"},
+    ]
+    content = "<h2>A</h2>"
+    out = g._insert_course_summary(content, results)
+    assert "A → B" in out
+    summary_line = out.split("🚶")[1].split("</p>")[0]
+    assert "미확인" not in summary_line
+
