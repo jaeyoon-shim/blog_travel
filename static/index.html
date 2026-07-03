@@ -128,7 +128,7 @@ const API='';
 // ── 상태 ──
 let step=1, photos=[], groups=[], drafts=[], blocks=[], selBlock=-1;
 let curGroup=0, curDraft=0, draftTitle='', draftTags=[];
-let tripTitle='', selMode='by_place', placeMemos={}, routeModes={}, refUrls=[], planData=null;
+let tripTitle='', selMode='by_place', placeMemos={}, routeModes={}, refUrls=[], planData=null, publishedGis=new Set();
 let settings={}, pollTimer=null;
 
 // ── DOM ──
@@ -686,8 +686,10 @@ $eb.innerHTML=`
 <div class="flex gap-6 mt-12">
   <button class="btn btn-pri" style="flex:1" onclick="doGen()">✨ 선택한 Day만 생성</button>
   <button class="btn btn-ok" style="flex:1" onclick="doGenAll()">🚀 전체 일정 생성</button>
-</div>`;
+</div>
+<button class="btn btn-ghost w-full mt-6" onclick="doSaveDrafts()">💾 초안 저장 (재시작해도 유지)</button>`;
 loadDayList();renderOutline();}
+async function doSaveDrafts(){try{const r=await fetch(`${API}/api/drafts/save`,{method:'POST'});const d=await r.json();const n=(d.saved_groups||[]).length;alert(n?`✅ ${n}개 일차의 초안을 저장했습니다`:'저장할 초안이 없습니다 (먼저 생성해주세요)')}catch(e){alert('저장 실패: '+e.message)}}
 async function loadDayList(){
   try{const r=await fetch(`${API}/api/groups`);groups=await r.json()}catch(e){groups=[]}
   if(curGroup>=groups.length)curGroup=0;
@@ -780,22 +782,33 @@ function addBlk(t){const i=selBlock>=0?selBlock+1:blocks.length;blocks.splice(i,
 // ═══ STEP 6: 발행 ═══
 function renderS5(){$et.textContent='🚀 발행';$badge.textContent='STEP 6';
 const api=settings.api||{};
-$eb.innerHTML=`
+let tabs='';
+if(groups.length>1){tabs=`<div class="group-tabs">`+groups.map((g,i)=>`<button class="group-tab ${i===curGroup?'active':''}" onclick="pubSwitch(${i})">${publishedGis.has(i)?'✓ ':''}${g?.label||'그룹'+(i+1)}</button>`).join('')+`</div>`}
+$eb.innerHTML=`${tabs}
 <div class="card"><div class="card-label">제목</div><input type="text" id="pTitle" value="${esc(draftTitle)}"></div>
 <div class="card"><div class="card-label">태그</div><input type="text" id="pTags" value="${(draftTags||[]).join(', ')}" placeholder="쉼표 구분"></div>
 <div class="card"><div class="card-label">발행 방식</div><select id="pMethod"><option value="selenium" ${api.publish_method==='selenium'?'selected':''}>자동 (Selenium)</option><option value="clipboard" ${api.publish_method==='clipboard'?'selected':''}>수동 (클립보드)</option></select></div>
 <div class="card"><div class="card-label">공개 설정</div><select id="pVis"><option ${api.default_visibility==='비공개'?'selected':''}>비공개</option><option ${api.default_visibility==='공개'?'selected':''}>공개</option></select></div>
-<div class="card"><div class="card-label">요약</div><div class="text-sm text-fg2">블록 ${blocks.length}개 · 이미지 ${blocks.filter(b=>b.type==='image').length}장</div></div>
-<button class="btn btn-pri w-full mt-12" onclick="doPub()">📤 발행</button>
+<div class="card"><div class="card-label">요약</div><div class="text-sm text-fg2">${groups[curGroup]?.label||''} · 블록 ${blocks.length}개 · 이미지 ${blocks.filter(b=>b.type==='image').length}장</div></div>
+<button class="btn btn-pri w-full mt-12" onclick="doPub()">📤 이 일차 발행</button>
 <button class="btn btn-ok w-full mt-6" onclick="doPubAll()">🚀 전체 일정 한번에 발행</button>
 <button class="btn btn-ghost w-full mt-6" onclick="doSave()">💾 로컬 저장</button>`}
+
+async function pubSwitch(gi){if(gi===curGroup){renderS5();return}
+const r=await fetch(`${API}/api/blocks/${gi}/0`);const d=await r.json();
+if(d.error||!d.blocks){alert(`${gi+1}일차의 초안이 없습니다. STEP4에서 생성해주세요.`);return}
+curGroup=gi;blocks=d.blocks;draftTitle=d.title||draftTitle;draftTags=d.tags||[];renderS5();updatePreview()}
 
 async function doPub(){const t=document.getElementById('pTitle')?.value||draftTitle;
 const tags=(document.getElementById('pTags')?.value||'').split(',').map(s=>s.trim()).filter(Boolean);
 const method=document.getElementById('pMethod')?.value||'selenium';
 const vis=document.getElementById('pVis')?.value||'비공개';
 show('발행 중...');await fetch(`${API}/api/publish`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t,blocks,tags,method,visibility:vis})});
-startPoll(p=>{if(p.status==='done')alert('✅ 발행 완료!');else if(p.status==='error')alert('❌ 발행 실패\n\n'+(p.message||'알 수 없는 오류'))})}
+startPoll(p=>{if(p.status==='done'){publishedGis.add(curGroup);
+const next=groups.findIndex((g,i)=>!publishedGis.has(i));
+if(next>=0&&confirm(`✅ 발행 완료!\n\n다음 일차(${groups[next]?.label||(next+1)+'일차'})를 이어서 발행할까요?`)){pubSwitch(next)}
+else{alert('✅ 발행 완료!');renderS5()}}
+else if(p.status==='error')alert('❌ 발행 실패\n\n'+(p.message||'알 수 없는 오류'))})}
 
 async function doPubAll(){
   const method=document.getElementById('pMethod')?.value||'selenium';
