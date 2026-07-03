@@ -78,4 +78,6 @@
 
 6. **포트 5000에 옛 서버 3개 중첩(#7d 재발)**: bash에서 `powershell -Command "... \"name='python.exe'\" ..."` 이스케이프가 깨져 Stop-Process가 **조용히 실패** → 11시/14시/16시 서버 3개가 SO_REUSEADDR로 같이 리스닝, 옛 코드가 응답해 "count=10인데 방문 3개, 불용어 미적용"처럼 보였다. **교훈**: 재시작 후 반드시 `netstat -ano | grep :5000 | grep LISTENING | wc -l`이 **1인지 확인**. 죽일 땐 PID를 netstat에서 직접 뽑아 `taskkill //F //PID`.
 
-7. **curl로 한글 테스트 시 인코딩 2종 함정**: (a) `-F "photos=@한글파일.jpg"` → 멀티파트 파일명 깨져 "파일이 없습니다"(브라우저 업로드는 무관). ASCII 사본으로 테스트. (b) `-d '{"title":"한글"}'` → body가 cp949로 나가 Flask가 400 (utf-8 디코드 실패). UTF-8로 저장한 파일을 `--data-binary @file`로 보낼 것.
+7. **발행 브라우저는 반드시 poster.close()로 닫는다 (강제종료 금지)**: 발행 Chrome을 안 닫으면 selenium_profile 잠금으로 다음 발행 전멸("session not created"), 잠금을 taskkill로 강제 해제하면 **네이버 세션이 무효화**되어 다음 발행에서 수동 로그인(180초)이 다시 필요해진다. 또한 발행이 낳은 **chromedriver가 Flask의 5000 리스닝 소켓을 상속**한 채 살아남아, 서버를 죽여도 유령 리스너가 포트를 잡는다(HTTP 000). → 2026-07-03 수정: 발행 task `finally: poster.close()`(정상 종료라 세션 보존+소켓 해제). 검증: 연속 2건 발행 성공, 2번째는 로그인 생략, chromedriver 0.
+
+8. **curl로 한글 테스트 시 인코딩 2종 함정**: (a) `-F "photos=@한글파일.jpg"` → 멀티파트 파일명 깨져 "파일이 없습니다"(브라우저 업로드는 무관). ASCII 사본으로 테스트. (b) `-d '{"title":"한글"}'` → body가 cp949로 나가 Flask가 400 (utf-8 디코드 실패). UTF-8로 저장한 파일을 `--data-binary @file`로 보낼 것.
