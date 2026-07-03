@@ -1953,6 +1953,8 @@ class TravelBlogGenerator:
             post = self._call_ai(prompt, s["temp"], photos)
             if post:
                 post["style"] = s["name"]
+                if post.get("content"):
+                    post["content"] = self._number_places(post["content"])
                 # 지역 위키 박스를 글 최상단에 삽입 (있을 때만)
                 if region_desc and post.get("content"):
                     post["content"] = region_desc + "\n" + post["content"]
@@ -2465,6 +2467,18 @@ class TravelBlogGenerator:
             rf'(?:{sep})(?:\s*(?:<br\s*/?>)?\s*(?:{sep}))+',
             '<p style="text-align:center;color:#d4d4d4;letter-spacing:8px">─ ─ ─ ─ ─ ─ ─</p>',
             content)
+
+    @staticmethod
+    def _number_places(content):
+        """AI가 채번하지 않고 남긴 'PLACE N' 리터럴을 등장 순서대로 1,2,3…으로 치환.
+        (형식은 코드가 조립 — AI 채번 의존 제거) 이미 숫자면 무변경. 순수함수."""
+        if not content or "PLACE N" not in content:
+            return content or ""
+        counter = {"n": 0}
+        def _sub(m):
+            counter["n"] += 1
+            return f"PLACE {counter['n']}"
+        return re.sub(r"PLACE N\b", _sub, content)
 
     def _insert_photos_with_map(self, content, results):
         """장소 매칭 기반 사진 삽입

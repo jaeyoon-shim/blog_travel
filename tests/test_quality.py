@@ -614,3 +614,17 @@ def test_summarize_publish_results():
     # 빈 입력 안전
     s, msg = summarize_publish_results([], [])
     assert s == "error"
+
+
+def test_number_places():
+    f = TravelBlogGenerator._number_places
+    html = ('<p style="letter-spacing:3px">PLACE N</p><p>본문</p>'
+            '<p style="letter-spacing:3px">PLACE N</p>')
+    out = f(html)
+    assert "PLACE 1" in out and "PLACE 2" in out and "PLACE N" not in out
+    # 이미 채번된 것은 무변경
+    done = '<p>PLACE 1</p><p>PLACE 2</p>'
+    assert f(done) == done
+    # PLACE 없음 → 무변경, 빈 입력 안전
+    assert f("<p>그냥 본문</p>") == "<p>그냥 본문</p>"
+    assert f("") == ""
