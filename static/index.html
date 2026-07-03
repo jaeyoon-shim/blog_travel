@@ -89,6 +89,10 @@ textarea{resize:vertical;min-height:50px;line-height:1.5}
 <div class="app" id="app">
   <header class="header">
     <div class="logo">✈ TravelBlog Pro</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-left:10px">
+      <select id="projSel" style="max-width:180px;font-size:12px" onchange="switchProject(this.value)"></select>
+      <button class="btn btn-ghost btn-sm" onclick="newProject()">＋ 새 여행</button>
+    </div>
     <div class="steps" id="steps">
       <button class="step-btn active" data-step="1">1. 설정</button>
       <button class="step-btn" data-step="2">2. 업로드</button>
@@ -376,8 +380,20 @@ rdz.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();rdz.style
 if($pc) $pc.innerHTML='<div style="text-align:center;padding:60px 30px;color:#9ca3af"><div style="font-size:40px;margin-bottom:12px">✈</div><div style="font-size:14px">사진을 업로드하면<br>계획·구조 미리보기가 표시됩니다</div></div>';
 restoreUploadState();}
 
+async function loadProjects(){try{const r=await fetch(`${API}/api/projects`);const d=await r.json();const sel=document.getElementById('projSel');if(!sel)return;
+sel.innerHTML=(d.projects||[]).map(p=>`<option value="${esc(p.folder)}" ${p.folder===d.current?'selected':''}>${esc(p.trip_title||p.folder)}${p.days?` (${p.days}일)`:''}</option>`).join('')||'<option value="">(여행 없음)</option>';
+if(d.current&&![...sel.options].some(o=>o.value===d.current)){sel.insertAdjacentHTML('afterbegin',`<option value="${esc(d.current)}" selected>${esc(d.current)}</option>`)}}catch(e){}}
+async function switchProject(folder){if(!folder)return;
+if(!confirm('현재 작업은 자동 저장됩니다. 이 여행으로 전환할까요?')){loadProjects();return}
+const r=await fetch(`${API}/api/projects/open`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder})});
+const d=await r.json();if(d.error){alert(d.error);loadProjects();return}
+location.reload()}
+async function newProject(){if(!confirm('현재 작업은 자동 저장되고, 새 여행을 시작합니다. 계속할까요?'))return;
+await fetch(`${API}/api/projects/new`,{method:'POST'});location.reload()}
+
 async function restoreUploadState(){
   try{const r=await fetch(`${API}/api/status`);const d=await r.json();
+    if(d.published_gis)publishedGis=new Set(d.published_gis);   // 발행기록 미러(프로젝트 보존)
     const uc=d.upload_count||0, ac=d.photo_count||0;
     const c=document.getElementById('upPhotos'), b=document.getElementById('anaBtn');
     if(ac>0){  // 이미 분석 완료
@@ -847,6 +863,7 @@ h+=d.html;$pc.innerHTML=h}catch(e){}}
 
 // ── 초기화 ──
 async function init(){
+  loadProjects();   // 헤더 여행 셀렉터 (실패해도 무해)
   try {
     const r=await fetch(`${API}/api/profiles`);const d=await r.json();
     const profiles=d.profiles||[];const last=d.last_used||'';
