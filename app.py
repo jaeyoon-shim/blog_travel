@@ -527,6 +527,17 @@ def api_plan_draft():
     if _old_plan and _old_plan.get("days"):
         TripPlanner.merge_user_edits(state["plan"], _old_plan)
     _save_plan()
+    # 새 계획 확정 = 새 원고 세션: 이전 여행의 초안·SEO 근거가 새 여행에 새어들지 않게 초기화
+    # (오사카 테스트 후 도쿄 업로드 시 오사카 초안이 계속 나오던 혼입 버그)
+    state["group_states"] = {}
+    state["naver_analysis"] = None
+    try:
+        import shutil
+        _dd = os.path.join(_plan_dir(), "drafts")
+        if os.path.isdir(_dd):
+            shutil.rmtree(_dd)
+    except Exception as e:
+        logger.warning(f"이전 초안 폴더 정리 실패(무시): {e}")
     return jsonify(state["plan"])
 
 @app.route('/api/plan', methods=['GET'])

@@ -800,3 +800,25 @@ def test_drafts_save_load_roundtrip(tmp_path, monkeypatch):
     loaded = app_mod._load_saved_drafts(0)
     assert loaded and loaded[0]["title"] == "t"
     assert app_mod._load_saved_drafts(99) is None   # 없는 그룹 → None
+
+
+def test_plan_draft_resets_session(monkeypatch, tmp_path):
+    """새 계획 확정 = 새 원고 세션: 이전 여행의 초안·SEO 근거가 남지 않는다(오사카→도쿄 혼입 버그)."""
+    import app as app_mod
+    import core as core_mod
+    # 이전 여행(오사카) 잔재
+    app_mod.state["photo_results"] = [{"file_name": "a.jpg"}]
+    app_mod.state["group_states"] = {0: {"drafts": [{"title": "오사카 초안"}]}}
+    app_mod.state["naver_analysis"] = {"keyword": "오사카 여행"}
+    app_mod.state["plan"] = None
+    monkeypatch.setattr(app_mod, "_plan_dir", lambda: str(tmp_path))
+    d = tmp_path / "drafts"; d.mkdir()
+    (d / "group_0.json").write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(core_mod.TripPlanner, "build_draft",
+                        staticmethod(lambda pr, free_mode=False: {"trip_title": "", "days": [], "region": ""}))
+    c = app_mod.app.test_client()
+    r = c.post('/api/plan/draft', json={"overwrite": True})
+    assert r.status_code == 200
+    assert app_mod.state["group_states"] == {}          # 이전 초안 메모리 제거
+    assert app_mod.state["naver_analysis"] is None       # 이전 지역 SEO 근거 제거
+    assert not d.exists()                                 # 이전 초안 파일 제거

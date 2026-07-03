@@ -428,6 +428,7 @@ async function doAnalyze(){show('사진 분석 중...');await fetch(`${API}/api/
     if(p.status==='error'){alert('❌ 사진 분석 실패\n\n'+(p.message||'알 수 없는 오류'));return}
     if(p.status==='done'){const r=await fetch(`${API}/api/photos`);photos=await r.json();
       if(!photos.length){alert('분석된 사진이 없습니다. 사진을 먼저 업로드했는지 확인하세요.');return}
+      window._needNewDraft=true;   // 새 분석 = 새 계획 필요 (이전 여행 plan 재사용 금지)
       go(3)}
   })}
 
@@ -462,10 +463,13 @@ renderRefs();loadPlan()}
 
 async function loadPlan(){
   let r=await fetch(`${API}/api/plan`);let p=await r.json();
-  if(!p.days){
+  if(!p.days||window._needNewDraft){
     r=await fetch(`${API}/api/plan/draft`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{"overwrite":true}'});
     if(!r.ok){const pr=document.getElementById('planRoot');if(pr)pr.innerHTML='<div class="text-xs" style="color:var(--err)">계획 생성 실패 — 사진 분석을 먼저 하세요.</div>';return}
     p=await r.json();
+    window._needNewDraft=false;
+    // 새 계획 = 새 원고 세션: 이전 여행의 프론트 잔재(초안·발행기록·블록) 초기화
+    drafts=[];blocks=[];curGroup=0;curDraft=0;selBlock=-1;draftTitle='';draftTags=[];publishedGis.clear();
   }
   planData=p;
   if(!photos||!photos.length){ try{const pr=await fetch(`${API}/api/photos`); photos=await pr.json();}catch(e){} }
