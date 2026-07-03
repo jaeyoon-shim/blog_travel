@@ -572,12 +572,58 @@ def test_merge_tags():
     ai = ["# 후쿠오카", "야타이", "텐진", "라멘 ", "야경", "온천", "신사", "공원", "카페", "쇼핑"]
     merged = TravelBlogGenerator.merge_tags(ai, core)
     assert merged[:3] == core                       # 핵심 태그 우선 배치
-    assert len(merged) <= 10                        # 상한
+    assert len(merged) <= 25                        # 상한(기본값, I5: 10→25)
     norm = [t.replace(" ", "").replace("#", "") for t in merged]
     assert len(norm) == len(set(norm))              # 정규화 기준 중복 없음("# 후쿠오카"/"라멘 " 제거됨)
     # 빈 입력 안전
     assert TravelBlogGenerator.merge_tags(None, []) == []
     assert TravelBlogGenerator.merge_tags(["a"], None) == ["a"]
+    # 명시적 cap은 여전히 존중(하위호환)
+    assert len(TravelBlogGenerator.merge_tags(ai, core, cap=5)) == 5
+
+
+def test_merge_tags_cap25_default():
+    core = ["후쿠오카", "후쿠오카여행"]
+    ai = [f"태그{i}" for i in range(40)]             # core+ai 합쳐 25개 초과
+    merged = TravelBlogGenerator.merge_tags(ai, core)
+    assert len(merged) == 25                         # 기본 cap=25에서 정확히 잘림
+    assert merged[:2] == core                        # 핵심 태그 우선 순서 유지
+
+
+def test_expand_tags():
+    # 지역 없으면 빈 리스트
+    assert TravelBlogGenerator._expand_tags("", ["맛집", "카페"]) == []
+
+    # 무조건 포함 태그 + 방문 카테고리 없으면 카테고리 태그 미생성
+    tags = TravelBlogGenerator._expand_tags("기타큐슈", [])
+    assert tags == ["기타큐슈여행", "기타큐슈여행코스", "기타큐슈가볼만한곳"]
+    assert "기타큐슈맛집" not in tags                # 방문 안 한 카테고리는 환각 금지
+
+    # 방문 타입 기반 필터: 실제 방문 카테고리만 태그 생성
+    place_types = ["맛집", "카페", "숙소", "이자카야"]
+    tags = TravelBlogGenerator._expand_tags("기타큐슈", place_types)
+    assert "기타큐슈맛집" in tags
+    assert "기타큐슈카페" in tags
+    assert "기타큐슈숙소" in tags
+    assert "기타큐슈이자카야" in tags
+    assert "기타큐슈관광지" not in tags               # 관광지 관련 방문 없음 → 미생성
+    assert "기타큐슈시장" not in tags                 # 시장 방문 없음 → 미생성
+
+    # 관광지/시장 카테고리도 개별 확인
+    tags2 = TravelBlogGenerator._expand_tags("고쿠라", ["신사", "시장"])
+    assert "고쿠라관광지" in tags2
+    assert "고쿠라시장" in tags2
+    assert "고쿠라맛집" not in tags2
+
+
+def test_expand_tags_merge_core_priority():
+    # expand+core 병합 시 core가 항상 앞에 오도록 배선되는지(merge_tags 재사용 규약)
+    core = TravelBlogGenerator.extract_core_tags({"common_keywords": ["라멘", "맛집"]}, "고쿠라")
+    expand = TravelBlogGenerator._expand_tags("고쿠라", ["맛집", "이자카야"])
+    merged = TravelBlogGenerator.merge_tags(["AI태그1", "AI태그2"], core + expand, cap=25)
+    assert merged[:len(core)] == core                # core가 최우선
+    for t in expand:
+        assert t in merged                           # expand 태그도 반영
 
 
 def test_seo_check_warnings():

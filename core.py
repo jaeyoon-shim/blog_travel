@@ -1907,6 +1907,12 @@ class TravelBlogGenerator:
         region = self._detect_region(photos)
         region = self._koreanize_region(region)  # 네이버 SEO: 지역명 한글 정규화
         region_desc = self._generate_region_desc(region, naver_analysis)
+        # 태그 확장(I5)용 방문 카테고리 수집 — 각 사진의 Vision scene_type/place_type
+        place_types = [
+            (p.get("vision", {}).get("scene_type") or p.get("vision", {}).get("place_type") or "")
+            for p in photos
+        ]
+        place_types = [t for t in place_types if t]
 
         _progress("⏳ 3/6 장소 특징 검색...")
         place_intros = self._search_place_intros(photos)
@@ -1972,7 +1978,9 @@ class TravelBlogGenerator:
                 post["region"] = region
                 post["photo_results"] = photos
                 # SEO 강제·검증 (E): 핵심 태그 병합 + 경고 부착
-                post["tags"] = self.merge_tags(post.get("tags"), self.extract_core_tags(naver_analysis, region))
+                # 태그 확장(I5): 핵심 태그 + 지역×방문카테고리 조합 태그(결정적) → AI 태그로 채움
+                core_and_expand = self.extract_core_tags(naver_analysis, region) + self._expand_tags(region, place_types)
+                post["tags"] = self.merge_tags(post.get("tags"), core_and_expand, cap=25)
                 # 제목 최적화 (G6) — 실측 상위 제목 패턴 기반, 노출 관련은 코드가 강제
                 best_title = self.optimize_title(post, naver_analysis, region)
                 if best_title:
@@ -3504,7 +3512,41 @@ class TravelBlogGenerator:
         return tags[:5]
 
     @staticmethod
-    def merge_tags(ai_tags, core_tags, cap=10):
+    def _expand_tags(region, place_types):
+        """지역×방문 카테고리 조합 태그를 결정적으로 생성 (LLM 없음).
+        region이 비어 있으면 빈 리스트. 카테고리 태그는 실제 방문한(place_types에
+        존재하는) 카테고리에 대해서만 생성한다(방문 안 한 카테고리 환각 금지 — lessons #3).
+        place_types: 방문 stop들의 scene/POI 타입 문자열 목록(예: vision scene_type)."""
+        region = (region or "").strip()
+        if not region:
+            return []
+
+        tags = [f"{region}여행", f"{region}여행코스", f"{region}가볼만한곳"]
+
+        combined = " ".join(str(t).strip().lower() for t in (place_types or []) if t)
+
+        def has(*keywords):
+            return any(k in combined for k in keywords)
+
+        # 카테고리 키워드: 스펙에 명시된 영/한 표기 + 실제 Vision scene_type 한글 값(신사/사찰/공원/맛집 등)을
+        # 함께 매칭해야 실사용 데이터(코드베이스 scene_type 한글 enum)에서 정상 작동한다.
+        if has("restaurant", "food", "음식점", "식당", "맛집"):
+            tags.append(f"{region}맛집")
+        if has("cafe", "카페"):
+            tags.append(f"{region}카페")
+        if has("hotel", "lodging", "숙소", "료칸"):
+            tags.append(f"{region}숙소")
+        if has("temple", "shrine", "park", "attraction", "명소", "관광", "신사", "사찰", "공원"):
+            tags.append(f"{region}관광지")
+        if has("market", "시장"):
+            tags.append(f"{region}시장")
+        if has("bar", "izakaya", "이자카야", "술집"):
+            tags.append(f"{region}이자카야")
+
+        return tags
+
+    @staticmethod
+    def merge_tags(ai_tags, core_tags, cap=25):
         """핵심 태그(코드 추출)를 앞에 보장하고 AI 태그로 채움.
         공백/# 무시 정규화로 중복 제거, 상한 cap."""
         def norm(t):
