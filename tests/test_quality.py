@@ -643,3 +643,23 @@ def test_html_to_blocks_no_markdown_heading():
     heads = [b for b in blocks if b.get("type") == "heading"]
     assert any("핵심 정보" in h.get("content", "") for h in heads)
     assert any("여행 꿀팁" in h.get("content", "") for h in heads)
+
+
+def test_region_desc_uses_naver_evidence(monkeypatch):
+    import types, json as _json
+    g = TravelBlogGenerator(Config())
+    captured = {}
+    fake = types.SimpleNamespace(choices=[types.SimpleNamespace(
+        message=types.SimpleNamespace(content=_json.dumps(
+            {"intro": "소개", "specialties": [], "foods": [], "spots": []})))])
+    def fake_create(**k):
+        captured["messages"] = k["messages"]; return fake
+    monkeypatch.setattr(g.client.chat.completions, "create", fake_create)
+    na = {"common_keywords": ["료칸", "카메노이호텔"], "top_titles": ["기타큐슈 여행기 총정리"]}
+    g._generate_region_desc("기타큐슈", na)
+    user = captured["messages"][1]["content"]
+    assert "료칸" in user and "실측 참고" in user and "무시" in user
+    # 근거 미전달 → 기존 프롬프트 그대로 (회귀)
+    g._generate_region_desc("기타큐슈")
+    user2 = captured["messages"][1]["content"]
+    assert "실측 참고" not in user2

@@ -1899,7 +1899,7 @@ class TravelBlogGenerator:
         _progress("⏳ 2/6 지역 감지...")
         region = self._detect_region(photos)
         region = self._koreanize_region(region)  # 네이버 SEO: 지역명 한글 정규화
-        region_desc = self._generate_region_desc(region)
+        region_desc = self._generate_region_desc(region, naver_analysis)
 
         _progress("⏳ 3/6 장소 특징 검색...")
         place_intros = self._search_place_intros(photos)
@@ -2089,7 +2089,7 @@ class TravelBlogGenerator:
             logger.warning(f"⚠️ 지역명 한글화 실패: {e}")
         return name
 
-    def _generate_region_desc(self, region_hint):
+    def _generate_region_desc(self, region_hint, naver_analysis=None):
         """지역 위키 박스 생성 (AI) — 소개·특산품·먹거리·관광지 구조화 HTML 반환
 
         포스팅 최상단에 들어갈 '정보성 박스'. 디자인 시스템(올리브 #8B9467)에 맞춘
@@ -2101,6 +2101,18 @@ class TravelBlogGenerator:
         exclude = ("지역 미정", "위치 정보 오류", "장소 미정", "위치 정보 미정", "여행지")
         if region_hint.strip() in exclude:
             return ""
+        # 실측 근거(E의 네이버 상위 블로그 분석) — 있으면 재료로 제공, 환각 방지 지시 유지
+        evidence = ""
+        na = naver_analysis or {}
+        kws = [k for k in (na.get("common_keywords") or []) if k][:10]
+        top_titles = [t for t in (na.get("top_titles") or []) if t][:5]
+        if kws or top_titles:
+            evidence = (
+                "\n[실측 참고 — 이 지역 검색 상위 블로그의 빈출 키워드/제목입니다. "
+                "이 중 당신이 확실히 아는 것만 반영하고, 모르는 것은 무시하세요.]\n"
+                + (f"키워드: {', '.join(kws)}\n" if kws else "")
+                + (f"상위 글 제목: {' / '.join(top_titles)}\n" if top_titles else "")
+            )
         try:
             r = self.client.chat.completions.create(
                 model=self.model,
@@ -2112,13 +2124,14 @@ class TravelBlogGenerator:
                         "동·구·번지 단위의 작은 가게나 소규모 명소는 넣지 않는다. JSON으로만 응답."},
                     {"role": "user", "content":
                         f"'{region_hint}' 여행 전 꼭 알아야 할 핵심 정보를 아래 JSON 형식으로만 응답하세요.\n"
-                        f"모든 값은 한국어. specialties/foods/spots는 각 0~4개 배열 — "
+                        f"모든 값은 한국어. specialties/foods/spots는 각 0~6개 배열 — "
                         f"'{region_hint}' 안에 실제로 있고 전국적으로 유명한 것만 넣으세요. "
                         f"확실하지 않으면 빈 배열로 두세요(개수 채우기 절대 금지).\n"
-                        '{"intro":"2~4줄 지역 소개(확실한 사실만)","specialties":[],'
+                        f"{evidence}"
+                        '{"intro":"3~5줄 지역 소개(확실한 사실만)","specialties":[],'
                         '"foods":[],"spots":[]}'}
                 ],
-                max_tokens=500, temperature=0
+                max_tokens=700, temperature=0
             )
             txt = r.choices[0].message.content.strip()
             if "```json" in txt:
@@ -2128,9 +2141,9 @@ class TravelBlogGenerator:
             data = json.loads(txt)
 
             intro = (data.get("intro") or "").strip()
-            specialties = [s for s in (data.get("specialties") or []) if s][:5]
-            foods = [s for s in (data.get("foods") or []) if s][:5]
-            spots = [s for s in (data.get("spots") or []) if s][:5]
+            specialties = [s for s in (data.get("specialties") or []) if s][:6]
+            foods = [s for s in (data.get("foods") or []) if s][:6]
+            spots = [s for s in (data.get("spots") or []) if s][:6]
             if not intro and not (specialties or foods or spots):
                 return ""
 

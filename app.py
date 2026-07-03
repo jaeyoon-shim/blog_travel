@@ -704,6 +704,16 @@ def api_generate():
     def task():
         state["progress"] = {"status":"generating","message":"AI 초안 생성 중...","percent":0}
         try:
+            # 위키박스 실측 근거: SEO 분석이 없으면 자동 1회 확보(실패해도 생성 계속)
+            if not state.get("naver_analysis"):
+                try:
+                    _plan = state.get("plan") or {}
+                    _kw = (_plan.get("region") or "").strip()
+                    if _kw:
+                        state["progress"]["message"] = "지역 상위 블로그 분석 중..."
+                        state["naver_analysis"] = NaverBlogAnalyzer(state["cfg"]).analyze(_kw + " 여행")
+                except Exception as _e:
+                    logger.warning(f"자동 SEO 분석 실패(무시): {_e}")
             _apply_settings_to_generator()
             g = groups[gi]
             tmp = dict(g); tmp["place_memos"] = {**g.get("place_memos", {}), **(data.get("place_memos") or {})}
@@ -736,6 +746,16 @@ def api_generate_all():
     def task():
         state["progress"] = {"status":"generating","message":f"전체 {total}개 그룹 생성 중...","percent":0}
         try:
+            # 위키박스 실측 근거: SEO 분석이 없으면 자동 1회 확보(실패해도 생성 계속)
+            if not state.get("naver_analysis"):
+                try:
+                    _plan = state.get("plan") or {}
+                    _kw = (_plan.get("region") or "").strip()
+                    if _kw:
+                        state["progress"]["message"] = "지역 상위 블로그 분석 중..."
+                        state["naver_analysis"] = NaverBlogAnalyzer(state["cfg"]).analyze(_kw + " 여행")
+                except Exception as _e:
+                    logger.warning(f"자동 SEO 분석 실패(무시): {_e}")
             _apply_settings_to_generator()
             for gi in range(total):
                 g = groups[gi]
