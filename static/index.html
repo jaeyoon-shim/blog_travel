@@ -743,6 +743,7 @@ h+=`</div>`;
 // 초안 선택
 if(drafts.length>1){h+=`<div class="flex gap-6 mb-8">`+drafts.map((d,i)=>`<button class="btn ${i===curDraft?'btn-pri':'btn-ghost'} btn-sm" onclick="loadBlocks(${i})">초안${i+1}</button>`).join('')+`</div>`}
 const sw=(drafts[curDraft]||{}).seo_warnings||[];if(sw.length){h+=`<div class="card" style="background:#FDF3E7;border-color:#EED9B8"><div class="card-label">⚠️ SEO 점검</div>${sw.map(x=>`<div class="text-xs" style="color:#8A6D1F;margin:2px 0">· ${esc(x)}</div>`).join('')}</div>`}
+if(drafts.length){h+=`<div class="card"><div class="card-label">✍️ 피드백으로 다듬기</div><div class="text-xs text-fg3 mb-6">가안에 대한 요청을 적으면 AI가 최종본으로 재작성합니다. 사진·지역정보·경로는 그대로 보존됩니다.</div><textarea id="fbText" style="min-height:52px" placeholder="예: 더 감성적으로 / 2일차 설명 늘려줘 / 마무리를 따뜻하게"></textarea><button class="btn btn-pri btn-sm mt-6" onclick="doRevise()">✨ 최종본 재작성</button></div>`}
 h+=`<div class="card"><div class="card-label">제목</div><input type="text" id="bTitle" value="${esc(draftTitle)}" oninput="draftTitle=this.value;updatePreview()"></div>`;
 h+=`<div class="flex gap-6 mb-8"><button class="btn btn-ghost btn-sm" onclick="addBlk('text')">+ 텍스트</button><button class="btn btn-ghost btn-sm" onclick="addBlk('separator')">+ 구분선</button></div>`;
 h+='<div id="bList">';
@@ -756,6 +757,13 @@ if(['text','styled_label','heading','route'].includes(b.type)){
 h+=`<div class="card mt-8"><div class="card-label">블록 #${selBlock+1} 편집</div><textarea id="bEdit" style="min-height:60px" oninput="editBlk(this.value)">${esc(b.content||'')}</textarea></div>`}}
 h+=`<button class="btn btn-ok w-full mt-12" onclick="go(6)">발행 준비 →</button>`;
 $eb.innerHTML=h}
+
+async function doRevise(){const t=(document.getElementById('fbText')?.value||'').trim();if(!t){alert('피드백을 입력해주세요');return}
+if(!confirm('재작성하면 이 초안의 블록 수동 편집 내용이 초기화됩니다. 계속할까요?'))return;
+stat('피드백 반영해 재작성 중...',true);
+const r=await fetch(`${API}/api/revise`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gi:curGroup,di:curDraft,feedback:t})});
+const d=await r.json();if(d.error){alert(d.error);stat('');return}
+startPoll(async p=>{if(p.status==='done'){const rr=await fetch(`${API}/api/drafts/${curGroup}`);drafts=await rr.json();await loadBlocks(curDraft);renderS4();updatePreview();stat('✅ 최종본 재작성 완료')}else{alert(p.message||'재작성 실패 — 원본은 유지됩니다')}})}
 
 async function switchGroup(gi){if(gi===curGroup)return;
 const r=await fetch(`${API}/api/drafts/${gi}`);const d=await r.json();
