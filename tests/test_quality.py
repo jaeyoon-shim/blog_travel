@@ -665,6 +665,27 @@ def test_region_desc_uses_naver_evidence(monkeypatch):
     assert "실측 참고" not in user2
 
 
+def test_region_desc_tips_access(monkeypatch):
+    import types, json as _json
+    g = TravelBlogGenerator(Config())
+    fake = types.SimpleNamespace(choices=[types.SimpleNamespace(
+        message=types.SimpleNamespace(content=_json.dumps({
+            "intro": "소개", "specialties": [], "foods": ["라멘"], "spots": [],
+            "tips": ["겨울엔 방한 필수"], "access": ["공항에서 지하철 30분"]})))])
+    monkeypatch.setattr(g.client.chat.completions, "create", lambda **k: fake)
+    box = g._generate_region_desc("기타큐슈")
+    assert "💡" in box and "방한" in box
+    assert "🚌" in box and "지하철" in box
+    # 빈 배열이면 행 생략
+    fake2 = types.SimpleNamespace(choices=[types.SimpleNamespace(
+        message=types.SimpleNamespace(content=_json.dumps({
+            "intro": "소개", "specialties": [], "foods": [], "spots": [],
+            "tips": [], "access": []})))])
+    monkeypatch.setattr(g.client.chat.completions, "create", lambda **k: fake2)
+    box2 = g._generate_region_desc("기타큐슈")
+    assert "💡" not in box2 and "🚌" not in box2
+
+
 # ── F2: 피드백 재작성 — 자산 잠금(_protect_assets/_restore_assets) ──
 _ASSET_HTML = (
     '<p>인트로 문장.</p>'

@@ -2125,14 +2125,15 @@ class TravelBlogGenerator:
                         "동·구·번지 단위의 작은 가게나 소규모 명소는 넣지 않는다. JSON으로만 응답."},
                     {"role": "user", "content":
                         f"'{region_hint}' 여행 전 꼭 알아야 할 핵심 정보를 아래 JSON 형식으로만 응답하세요.\n"
-                        f"모든 값은 한국어. specialties/foods/spots는 각 0~6개 배열 — "
+                        f"모든 값은 한국어. specialties/foods/spots는 각 0~6개, tips(여행 실용 팁)는 0~3개, "
+                        f"access(대표 접근 교통)는 0~2개 배열 — "
                         f"'{region_hint}' 안에 실제로 있고 전국적으로 유명한 것만 넣으세요. "
                         f"확실하지 않으면 빈 배열로 두세요(개수 채우기 절대 금지).\n"
                         f"{evidence}"
-                        '{"intro":"3~5줄 지역 소개(확실한 사실만)","specialties":[],'
-                        '"foods":[],"spots":[]}'}
+                        '{"intro":"4~6줄 지역 소개(확실한 사실만)","specialties":[],'
+                        '"foods":[],"spots":[],"tips":[],"access":[]}'}
                 ],
-                max_tokens=700, temperature=0
+                max_tokens=900, temperature=0
             )
             txt = r.choices[0].message.content.strip()
             if "```json" in txt:
@@ -2145,7 +2146,9 @@ class TravelBlogGenerator:
             specialties = [s for s in (data.get("specialties") or []) if s][:6]
             foods = [s for s in (data.get("foods") or []) if s][:6]
             spots = [s for s in (data.get("spots") or []) if s][:6]
-            if not intro and not (specialties or foods or spots):
+            tips = [s for s in (data.get("tips") or []) if s][:3]
+            access = [s for s in (data.get("access") or []) if s][:2]
+            if not intro and not (specialties or foods or spots or tips or access):
                 return ""
 
             rows = []
@@ -2155,6 +2158,10 @@ class TravelBlogGenerator:
                 rows.append(("🍽 먹거리", " · ".join(foods)))
             if spots:
                 rows.append(("🗺 관광지", " · ".join(spots)))
+            if access:
+                rows.append(("🚌 가는 법", " · ".join(access)))
+            if tips:
+                rows.append(("💡 여행 팁", " · ".join(tips)))
             row_html = "".join(
                 f'<p style="font-size:0.9em;color:#3d3d3d;line-height:1.9;margin:6px 0">'
                 f'<b style="color:#8B9467">{label}</b>  {val}</p>'
@@ -2172,7 +2179,7 @@ class TravelBlogGenerator:
                 f'{intro_html}{row_html}'
                 '</div>'
             )
-            logger.info(f"📍 지역 위키 박스 생성: {region_hint} (특산품{len(specialties)}/먹거리{len(foods)}/관광지{len(spots)})")
+            logger.info(f"📍 지역 위키 박스 생성: {region_hint} (특산품{len(specialties)}/먹거리{len(foods)}/관광지{len(spots)}/팁{len(tips)}/교통{len(access)})")
             return box
         except Exception as e:
             logger.warning(f"⚠️ 지역 위키 박스 생성 실패: {e}")
