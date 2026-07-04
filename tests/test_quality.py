@@ -1106,3 +1106,18 @@ def test_insert_course_summary_excludes_unconfirmed():
     summary_line = out.split("🚶")[1].split("</p>")[0]
     assert "미확인" not in summary_line
 
+
+
+def test_normalize_naver_url():
+    # 네이버 글 URL(iframe 래퍼) → PostView(실제 본문) 정규화
+    from core import StyleAnalyzer
+    f = StyleAnalyzer._normalize_naver_url
+    assert f("https://blog.naver.com/eng1470/224259142651") == \
+        "https://blog.naver.com/PostView.naver?blogId=eng1470&logNo=224259142651"
+    assert f("https://m.blog.naver.com/eng1470/224259142651?ref=x") == \
+        "https://blog.naver.com/PostView.naver?blogId=eng1470&logNo=224259142651"
+    # 이미 PostView이거나 네이버가 아니면 그대로
+    pv = "https://blog.naver.com/PostView.naver?blogId=a&logNo=1"
+    assert f(pv) == pv
+    assert f("https://example.com/post/1") == "https://example.com/post/1"
+    assert f("") == ""

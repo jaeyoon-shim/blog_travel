@@ -523,8 +523,10 @@ _SESSION_KEYS = ["photo_paths", "photo_results", "naver_analysis",
 
 
 def _save_project():
-    """현재 세션(분석 결과·SEO·문체·영수증·발행기록)을 project.json으로 저장 — 여행=프로젝트."""
-    if not (state.get("plan") or state.get("photo_results")):
+    """현재 세션(분석 결과·SEO·문체·영수증·발행기록)을 project.json으로 저장 — 여행=프로젝트.
+    완전 빈 세션만 제외 — 새 여행 직후 문체 분석만 한 상태도 저장돼야
+    서버 재시작에서 살아남는다(사진/plan 없다고 문체를 버리면 안 됨)."""
+    if not (state.get("plan") or any(state.get(k) for k in _SESSION_KEYS)):
         return
     try:
         d = _plan_dir()
@@ -817,6 +819,9 @@ def api_style():
             merged["examples"] = list(dict.fromkeys(all_ex))[:2]
             merged["source_urls"] = list(dict.fromkeys(all_src))
             state["style_analysis"] = merged
+            # 문체 분석은 여기서만 갱신되는데 자동저장 훅(분석완료·plan저장·발행성공)
+            # 밖이라, 저장하지 않으면 서버 재시작 시 소실된다 → 즉시 프로젝트에 저장
+            _save_project()
         warning = next((r.get("warning") for r in results if r.get("warning")), None)
         return jsonify({"count": len(results), "results": results, "warning": warning})
     except Exception as e:

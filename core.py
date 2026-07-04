@@ -85,8 +85,22 @@ class StyleAnalyzer:
         logger.info(f"✅ 문체 분석 완료: {profile.get('tone','')} ({profile.get('extracted_by')})")
         return profile
 
+    @staticmethod
+    def _normalize_naver_url(url):
+        """네이버 블로그 글 URL을 본문이 실제로 담긴 PostView URL로 정규화.
+        blog.naver.com/<id>/<글번호>는 iframe 래퍼 페이지라 본문이 비어 있어
+        그대로 긁으면 문체 분석이 정규식 폴백으로 떨어진다."""
+        m = re.match(
+            r'https?://(?:m\.)?blog\.naver\.com/([A-Za-z0-9_-]+)/(\d+)/?(?:[?#].*)?$',
+            (url or "").strip())
+        if m:
+            return (f"https://blog.naver.com/PostView.naver"
+                    f"?blogId={m.group(1)}&logNo={m.group(2)}")
+        return url
+
     def _scrape(self, url):
         """URL에서 원문 문단/제목/이미지수 수집. 실패 시 빈 구조."""
+        url = self._normalize_naver_url(url)
         empty = {"title": "", "headings": [], "paragraphs": [], "image_count": 0}
         try:
             from bs4 import BeautifulSoup
