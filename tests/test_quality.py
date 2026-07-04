@@ -1077,6 +1077,21 @@ def test_insert_course_summary_single_place_not_inserted():
     assert "🚶" not in out
 
 
+def test_insert_course_summary_skips_when_already_present():
+    # 프롬프트 템플릿이 인트로에 "📍 {course_line}"을 이미 넣으므로(코스 라인 존재 시)
+    # 백스톱 삽입이 중복되면 안 된다 — 실생성 E2E에서 발견된 중복 회귀 방지.
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    results = [{"location_name": "A"}, {"location_name": "B"}, {"location_name": "C"}]
+    content = '<p>📍 A → B → C</p><h2>A</h2><p>본문</p>'
+    out = g._insert_course_summary(content, results)
+    assert out == content
+    assert "🚶" not in out
+    # 괄호 별칭 등 이름 뒤 짧은 덧말이 붙어도 존재로 판정해야 한다
+    content2 = '<p>📍 A(극장) → B → C</p><h2>A</h2>'
+    out2 = g._insert_course_summary(content2, results)
+    assert "🚶" not in out2
+
+
 def test_insert_course_summary_excludes_unconfirmed():
     g = TravelBlogGenerator.__new__(TravelBlogGenerator)
     results = [

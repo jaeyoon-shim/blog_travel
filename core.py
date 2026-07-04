@@ -2878,6 +2878,14 @@ class TravelBlogGenerator:
         if len(names) < 2:
             return content
 
+        # 프롬프트 템플릿이 인트로에 이미 "📍 {course_line}"을 넣도록 지시하므로
+        # (AI가 그 지시를 따랐다면) 중복 삽입하지 않는다 — 이 함수는 AI가 코스 라인을
+        # 빠뜨렸을 때만 동작하는 백스톱이다. 앞 두 장소가 화살표로 이어져 있으면 존재로 판정.
+        probe = re.compile(
+            re.escape(names[0]) + r'[^<]{0,30}(→|->)\s*' + re.escape(names[1]))
+        if probe.search(content):
+            return content
+
         summary = " → ".join(names)
         html = f'<p style="text-align:center;margin:16px 0;color:#666">🚶 {summary}</p>'
 
