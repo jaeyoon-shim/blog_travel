@@ -95,3 +95,11 @@
 4. **스펙의 매칭 키워드는 실제 데이터 enum과 대조**: `_expand_tags` 스펙이 영문 키워드(restaurant/cafe)만 나열했는데 실데이터 `vision.scene_type`은 한글 enum(맛집/신사/사찰)이라 그대로면 무동작이었다. fast-worker가 발견·보정. 매칭 로직 스펙을 쓸 때 실제 필드 값 도메인을 함께 명시할 것.
 
 5. **PIL Image.open은 with로**: Windows에서 핸들이 안 닫혀 임시파일 os.remove가 PermissionError. `with Image.open(p) as src:` 필수.
+
+## 2026-07-04 — 문체 따라하기 실효성 버그 2건 (사용자 "넣었는데?" 추적)
+
+1. **네이버 블로그 글 URL은 iframe 래퍼 — 그대로 긁으면 본문이 빈다**: `blog.naver.com/<id>/<글번호>`를 urllib으로 읽으면 래퍼 HTML만 와서 StyleAnalyzer가 정규식 폴백(tone=일반, 예시 0)으로 조용히 저하됐다. 실제 본문은 `PostView.naver?blogId=&logNo=`. → `_normalize_naver_url`로 정규화. **"기능이 돌았다"와 "기능이 효과를 냈다"는 다르다 — 폴백 경로로 빠졌는지 extracted_by를 확인할 것.**
+
+2. **state에만 있는 분석 결과는 재시작에 소실**: `/api/style` 결과가 자동저장 훅(분석완료·plan저장·발행성공) 밖이라 서버 재시작(에이전트가 자주 함!)에 날아갔다. 사용자가 "넣었는데" 어제 생성이 문체 없이 돈 원인. → 성공 시 `_save_project()` 즉시 호출 + 빈 세션 가드 완화(`_SESSION_KEYS` 중 하나라도 있으면 저장). **state 슬롯을 새로 채우는 API를 만들면 "이 값은 어느 훅에서 영속되나"를 반드시 확인.**
+
+3. **진단 순서 교훈**: "안 되는데?" → 설정에 입력값 존재 확인(settings/profiles) → state/영속 파일에 결과 존재 확인(project.json) → 폴백 여부(extracted_by/warning) 확인. 이번엔 셋 다에서 각각 다른 문제가 나왔다(입력 O, 영속 X, 폴백 O).
