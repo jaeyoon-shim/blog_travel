@@ -103,3 +103,12 @@
 2. **state에만 있는 분석 결과는 재시작에 소실**: `/api/style` 결과가 자동저장 훅(분석완료·plan저장·발행성공) 밖이라 서버 재시작(에이전트가 자주 함!)에 날아갔다. 사용자가 "넣었는데" 어제 생성이 문체 없이 돈 원인. → 성공 시 `_save_project()` 즉시 호출 + 빈 세션 가드 완화(`_SESSION_KEYS` 중 하나라도 있으면 저장). **state 슬롯을 새로 채우는 API를 만들면 "이 값은 어느 훅에서 영속되나"를 반드시 확인.**
 
 3. **진단 순서 교훈**: "안 되는데?" → 설정에 입력값 존재 확인(settings/profiles) → state/영속 파일에 결과 존재 확인(project.json) → 폴백 여부(extracted_by/warning) 확인. 이번엔 셋 다에서 각각 다른 문제가 나왔다(입력 O, 영속 X, 폴백 O).
+
+## 2026-07-05 — 업로드 실패(doctype 에러) 근본수정 + 어제 오진 정정
+
+1. **어제(7/4) 오진 정정 — "시스템 파이썬" 아니었다**: 시스템 Python310엔 flask 자체가 없어 서버로 못 뜬다. venv 런처(Scripts/python.exe)는 자식 프로세스 CommandLine이 기본 인터프리터 경로로 보이므로 **CommandLine/Path로는 venv 여부를 구분할 수 없다**. 진짜 원인은 아래 2~4의 복합.
+2. **프론트 fetch는 r.ok를 먼저 확인하라**: 서버가 HTML(413/500 디버그 페이지)을 주면 r.json()이 "Unexpected token <"로 죽어 원인이 가려진다. debug=True Flask는 모든 오류가 HTML로 나간다.
+3. **대용량 업로드는 배치 분할이 기본**: 전체 사진 한 요청 = MAX_CONTENT_LENGTH(500MB) 초과 시 라우트 밖(Werkzeug)에서 HTML 413 → 서버 로그에도 안 남아 오리무중. 25장/120MB 배치 + append=1 + 413 JSON errorhandler로 해결.
+4. **업로드도 영속화 대상**: state["photo_paths"]가 메모리 전용이라 서버 재시작에 업로드가 증발했다(7/4 71장 유실 — 에이전트 재시작이 사용자 업로드를 지운 사고). state 슬롯을 채우는 모든 라우트는 _save_project() 훅 점검.
+5. **포트 중복은 코드로 원천 차단**: netstat 확인 규칙(lessons #7d)을 사람이 지키게 하지 말고, app.py 기동 시 5000 점유 감지 → 안내 후 exit 1. 재발 사고 클래스를 가드로 봉인(실검증: 2중 기동 차단 확인).
+6. **에이전트 백그라운드 서버는 로그를 파일로 남겨라**: -WindowStyle Hidden으로 띄우면 stdout이 증발해 사후 진단 불가. -RedirectStandardOutput/Error로 server.out.log/server.err.log 캡처(gitignore *.log 커버).
