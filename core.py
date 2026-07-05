@@ -1942,6 +1942,19 @@ class TravelBlogGenerator:
 
         naver_ctx = self._naver_context(naver_analysis)
         style_ctx = self._style_context(style_analysis)
+        # 어미 지시는 거대 프롬프트 속에서 희석돼 무시된다(실측: 규칙+설정충돌 제거
+        # 후에도 해요체 회귀). 어미 패턴 "목록"을 주면 레지스터가 뒤섞인 혼합체가
+        # 나온다(실측: 였다+답니다+더라고요 혼재) → 참고 문체의 지배 레지스터
+        # (평서체 vs 해요체)를 판별해 이진 지시로 system 메시지에 주입한다.
+        _endings = [e for e in ((style_analysis or {}).get("ending_patterns") or []) if e]
+        _plain = sum(1 for e in _endings
+                     if re.search(r'(다|였다|이다|한다|았다|었다|했다)\s*[.…]?\s*$', e))
+        if _endings and _plain * 2 >= len(_endings):
+            self._current_register = "plain"    # 반말 평서체(-다)
+        elif _endings:
+            self._current_register = "polite"   # 해요체
+        else:
+            self._current_register = None
 
         # 사용자 선택 구조 → 프롬프트에 반영
         struct_ctx = ""
@@ -2305,7 +2318,14 @@ class TravelBlogGenerator:
         # 사용자 커스텀 스타일 설정 (settings.json에서)
         custom_style_ctx = ""
         if hasattr(self, '_custom_style_prompt') and self._custom_style_prompt:
-            custom_style_ctx = "\n" + self._custom_style_prompt + "\n"
+            csp = self._custom_style_prompt
+            if (style_ctx or "").strip():
+                # 참고 문체(문체 따라하기)가 있으면 설정의 말투/톤 기본값
+                # ('친근 구어체' 등)이 그것을 되덮지 않게 해당 줄만 제거.
+                # 상충 지시 2개가 공존하면 모델이 구어체로 회귀한다(실측).
+                csp = "\n".join(l for l in csp.split("\n")
+                                if not re.match(r'\s*-\s*(말투|톤)\s*:', l))
+            custom_style_ctx = "\n" + csp + "\n"
 
         # 일정 일수 판별 (그룹 라벨에서)
         import re as _re
@@ -2531,11 +2551,19 @@ class TravelBlogGenerator:
                 extra = (f"\n\n[중요] 직전 응답이 길이 제한으로 잘렸습니다. "
                          f"본문 전체 분량을 {pct} 수준으로 줄이세요 — 장소별 설명을 "
                          f"더 간결하게, 사진 설명은 1줄로. JSON을 반드시 완결하세요.")
+            sys_msg = "인기 여행 블로거. 한글(현지어) 표기. JSON만 응답. 절대 구글맵 URL이나 이동경로 HTML을 넣지 마세요 - 자동 삽입됩니다. 사진에 보이는 사실과 제공된 장소 정보만 쓰고 확인 불가한 인테리어·재료·메뉴를 지어내지 마세요. 같은 형용사(아늑한/여유로운/편안한 등)를 반복하지 말고 장소마다 다르게 묘사하세요."
+            register = getattr(self, "_current_register", None)
+            if register == "plain":
+                sys_msg += (" 글 전체를 반말 평서체(문어체)로만 작성하세요 — 모든 문장이"
+                            " '-다'로 끝나야 합니다(예: ~였다, ~다고 한다, ~인상적이었다)."
+                            " 존댓말 어미(~요, ~니다, ~했어요, ~답니다, ~네요)는 단 한 문장도 금지.")
+            elif register == "polite":
+                sys_msg += " 글 전체를 해요체로 일관되게 작성하세요(어미 혼용 금지)."
             try:
                 r = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role":"system","content":"인기 여행 블로거. 한글(현지어) 표기. JSON만 응답. 절대 구글맵 URL이나 이동경로 HTML을 넣지 마세요 - 자동 삽입됩니다. 사진에 보이는 사실과 제공된 장소 정보만 쓰고 확인 불가한 인테리어·재료·메뉴를 지어내지 마세요. 같은 형용사(아늑한/여유로운/편안한 등)를 반복하지 말고 장소마다 다르게 묘사하세요."},
+                        {"role":"system","content":sys_msg},
                         {"role":"user","content":prompt + extra}
                     ],
                     temperature=temperature, max_tokens=self.max_tok

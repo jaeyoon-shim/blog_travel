@@ -1233,3 +1233,20 @@ def test_route_guide_inserted_before_destination_header():
     assert out.index("사진A2") < card < out.index("PLACE 2")
     # 목적지 섹션 내부(소개B 앞)여야 함
     assert card < out.index("소개B")
+
+
+def test_custom_style_yields_to_reference_style():
+    # 설정의 말투/톤 기본값([사용자 스타일 설정])이 참고 문체를 되덮지 않아야 한다.
+    g = TravelBlogGenerator(Config())
+    g._custom_style_prompt = ("[사용자 스타일 설정]\n- 말투: 친근 구어체\n"
+                              "- 톤: 감성적\n- 이모지: 적당히")
+    style = {"name": "감성", "desc": "감성적"}
+    photos = [{"location_name": "고쿠라 성", "file_name": "a.jpg",
+               "gps": {"lat": 33.88, "lon": 130.87}}]
+    ref = "\n[참고 문체 — 아래 규칙을 모방하되 문장을 그대로 베끼지 말 것]\n· 어미: ~였다"
+    p = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", ref)
+    assert "- 말투: 친근 구어체" not in p and "- 톤: 감성적" not in p
+    assert "- 이모지: 적당히" in p          # 말투/톤 외 설정은 유지
+    # 참고 문체 없으면 설정 말투 유지
+    p2 = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "")
+    assert "- 말투: 친근 구어체" in p2
