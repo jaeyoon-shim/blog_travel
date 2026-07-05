@@ -414,11 +414,33 @@ async function uploadFiles(files){
   c.innerHTML=`<div class="text-xs text-fg3">${imgs.length}장 업로드 중...</div><div class="photo-grid" id="tg"></div>`;
   const tg=document.getElementById('tg');
   imgs.forEach(f=>{tg.innerHTML+=`<div class="photo-thumb"><img src="${URL.createObjectURL(f)}"></div>`});
-  const fd=new FormData();imgs.forEach(f=>fd.append('photos',f));
-  try{const r=await fetch(`${API}/api/upload`,{method:'POST',body:fd});const d=await r.json();
-    stat(`✅ ${d.uploaded}장 업로드`);c.querySelector('.text-xs').textContent=`${d.uploaded}장 업로드 완료`;
+  // 배치 분할 업로드 — 전체를 한 요청에 실으면 서버 총량 제한(500MB, HTTP 413)에
+  // 걸려 통째로 실패한다. 요청당 최대 25장/120MB로 나눠 순차 전송(2번째부터 append).
+  const MAXB=120*1024*1024, MAXN=25;
+  const batches=[]; let cur=[], sz=0;
+  for(const f of imgs){
+    if(cur.length && (sz+f.size>MAXB || cur.length>=MAXN)){batches.push(cur);cur=[];sz=0}
+    cur.push(f); sz+=f.size;
+  }
+  if(cur.length)batches.push(cur);
+  try{
+    let total=0, allErrs=[];
+    for(let i=0;i<batches.length;i++){
+      const fd=new FormData();batches[i].forEach(f=>fd.append('photos',f));
+      if(i>0)fd.append('append','1');
+      stat(`업로드 중... ${total}/${imgs.length}장`,true);
+      const r=await fetch(`${API}/api/upload`,{method:'POST',body:fd});
+      if(!r.ok){
+        let msg=`서버 오류 (HTTP ${r.status})`;
+        try{const ed=await r.json();if(ed.error)msg=ed.error}catch(_){}
+        throw new Error(msg);
+      }
+      const d=await r.json();
+      total+=(d.uploaded||0); if(d.errors)allErrs.push(...d.errors);
+    }
+    stat(`✅ ${total}장 업로드`);c.querySelector('.text-xs').textContent=`${total}장 업로드 완료${allErrs.length?` (실패 ${allErrs.length})`:''}`;
     document.getElementById('anaBtn').classList.remove('hidden');
-  }catch(e){stat('❌ 업로드 실패');c.innerHTML=`<div class="card" style="border-color:var(--err)"><div style="color:var(--err);font-size:12px">❌ ${esc(e.message)}<br><span class="text-xs text-fg3">python app.py 실행 확인</span></div></div>`}}
+  }catch(e){stat('❌ 업로드 실패');c.innerHTML=`<div class="card" style="border-color:var(--err)"><div style="color:var(--err);font-size:12px">❌ ${esc(e.message)}<br><span class="text-xs text-fg3">서버(python app.py) 상태를 확인해주세요</span></div></div>`}}
 
 async function uploadReceipts(files){
   const imgs=Array.from(files).filter(f=>f.type.startsWith('image/'));

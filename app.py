@@ -331,11 +331,19 @@ def api_status():
 
 
 # ── 업로드 ──
+@app.errorhandler(413)
+def _too_large(e):
+    # MAX_CONTENT_LENGTH 초과 시 Werkzeug 기본 응답은 HTML이라 프론트가
+    # "Unexpected token '<'"로 죽는다 → JSON으로 명확히 알려준다
+    return jsonify({"error": "업로드 용량 초과 — 한 번에 500MB 이하로 나눠 올려주세요"}), 413
+
+
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
     files = request.files.getlist('photos')
     if not files:
         return jsonify({"error": "파일이 없습니다"}), 400
+    append = request.form.get('append') == '1'   # 프론트 배치 업로드의 2번째 이후 요청
     paths, errors = [], []
     for f in files:
         if not f.filename: continue
@@ -348,8 +356,13 @@ def api_upload():
             paths.append(str(dest))
         except Exception as e:
             errors.append(f"{f.filename}: {e}")
-    state["photo_paths"] = paths
-    return jsonify({"uploaded": len(paths), "files": [os.path.basename(p) for p in paths],
+    if append:
+        state["photo_paths"] = (state.get("photo_paths") or []) + paths
+    else:
+        state["photo_paths"] = paths
+    _save_project()   # 업로드 목록 영속화 — 서버 재시작으로 업로드가 증발하지 않게
+    return jsonify({"uploaded": len(paths), "total": len(state["photo_paths"]),
+                    "files": [os.path.basename(p) for p in paths],
                     "errors": errors if errors else None})
 
 
@@ -1150,6 +1163,24 @@ def serve_upload(filename):
 
 
 if __name__ == '__main__':
+    # 포트 중복 기동 가드 — Windows에서 SO_REUSEADDR 탓에 5000 포트에 서버가
+    # 겹으로 떠도 에러 없이 둘 다 리스닝돼 "어느 쪽이 응답할지 복불복" 사고가
+    # 반복됐다(lessons #7d). 이미 응답하는 서버가 있으면 새로 뜨지 않는다.
+    import socket as _socket
+    _probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    _probe.settimeout(1)
+    _port_busy = (_probe.connect_ex(("127.0.0.1", 5000)) == 0)
+    _probe.close()
+    if _port_busy:
+        print("\n" + "=" * 50)
+        print("  ❌ 이미 서버가 5000 포트에서 실행 중입니다.")
+        print("  브라우저에서 http://localhost:5000 을 그대로 쓰세요.")
+        print("  재시작하려면 기존 서버를 먼저 종료:")
+        print("    netstat -ano | findstr :5000")
+        print("    taskkill /F /PID <위에서 나온 PID>")
+        print("=" * 50 + "\n")
+        import sys as _sys
+        _sys.exit(1)
     init_engine()
     print("\n" + "="*50)
     print("  TravelBlog Pro v10.0 — Web Edition (Final)")
