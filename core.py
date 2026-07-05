@@ -2243,6 +2243,33 @@ class TravelBlogGenerator:
         place_list = list(place_photos.keys())
         num_places = len(place_list)
 
+        # 사진이 많은 그룹은 AI가 전 사진을 배치·설명하게 하면 응답이 max_tokens에
+        # 잘려 생성 자체가 실패한다(finish_reason=length — 34/62장 그룹 사고).
+        # → 20장 초과 시 장소당 대표 태그 1개만 지시하고 나머지는 코드가 자동 배치
+        #   (_insert_photos_with_map 2단계 h2 매칭). "형식은 코드가 조립" 원칙.
+        per_place_photo = len(photos) > 20
+        if per_place_photo:
+            rep_tags = "\n".join(
+                f"   - {p} → [PHOTO:{fns[0]}]"
+                for p, fns in place_photos.items() if fns and fns[0])
+            photo_rules = f"""4. ★★★ 사진 태그는 장소당 대표 1개만! (사진이 많은 날) ★★★
+   - 아래 대표 태그를 각 장소 섹션의 (C) 위치에 정확히 1개씩만 넣으세요:
+{rep_tags}
+   - 그 외 [PHOTO:] 태그는 절대 넣지 마세요 — 나머지 사진은 시스템이 자동 배치합니다
+   - 각 대표 태그 아래에 그 장소에서 찍은 사진들에 대한 감상을 2~3줄 <p>로 작성
+
+5. ★★★ 분량 절제 ★★★
+   - 장소가 많은 날이므로 장소당 소개·설명을 간결하게 — 응답 전체가 잘리면 안 됩니다"""
+        else:
+            photo_rules = f"""4. ★★★ 사진마다 2~3줄 설명 필수! ★★★
+   - 모든 [PHOTO:파일명] 바로 아래에 <p> 태그로 2~3줄 감상
+   - scene_description, food_name 참고하여 구체적 묘사
+   - 오감을 자극하는 표현 사용 (시각, 미각, 촉각, 후각)
+
+5. ★★★ 사진 배치 ★★★
+   - 총 {len(photos)}장이므로 [PHOTO:] 태그도 정확히 {len(photos)}개
+   - 사진 → 텍스트 → 사진 → 텍스트 리듬감 있게 반복"""
+
         # 장소별 사용자 메모
         memo_ctx = ""
         if place_memos:
@@ -2406,14 +2433,7 @@ class TravelBlogGenerator:
    - [장소별 특징 소개] 데이터가 있으면 반드시 활용
    - 소개글이 없는 장소 섹션은 절대 안 됨!
 
-4. ★★★ 사진마다 2~3줄 설명 필수! ★★★
-   - 모든 [PHOTO:파일명] 바로 아래에 <p> 태그로 2~3줄 감상
-   - scene_description, food_name 참고하여 구체적 묘사
-   - 오감을 자극하는 표현 사용 (시각, 미각, 촉각, 후각)
-
-5. ★★★ 사진 배치 ★★★
-   - 총 {len(photos)}장이므로 [PHOTO:] 태그도 정확히 {len(photos)}개
-   - 사진 → 텍스트 → 사진 → 텍스트 리듬감 있게 반복
+{photo_rules}
 
 6. ★★★ 구글맵/이동경로 HTML을 절대 넣지 마세요 ★★★
    - 구글맵 링크, iframe, maps URL은 코드에서 자동 삽입됩니다
@@ -2491,29 +2511,53 @@ class TravelBlogGenerator:
         return t or (title or "")
 
     def _call_ai(self, prompt, temperature, photos):
-        """AI 호출 + 사진 삽입 + 구글맵 링크 삽입 + 결정적 스크럽"""
-        try:
-            r = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role":"system","content":"인기 여행 블로거. 한글(현지어) 표기. JSON만 응답. 절대 구글맵 URL이나 이동경로 HTML을 넣지 마세요 - 자동 삽입됩니다. 사진에 보이는 사실과 제공된 장소 정보만 쓰고 확인 불가한 인테리어·재료·메뉴를 지어내지 마세요. 같은 형용사(아늑한/여유로운/편안한 등)를 반복하지 말고 장소마다 다르게 묘사하세요."},
-                    {"role":"user","content":prompt}
-                ],
-                temperature=temperature, max_tokens=self.max_tok
-            )
-            txt = r.choices[0].message.content.strip()
-            if "```json" in txt: txt=txt.split("```json")[1].split("```")[0].strip()
-            elif "```" in txt: txt=txt.split("```")[1].split("```")[0].strip()
-            post = json.loads(txt)
-            post["content"] = self._insert_photos_with_map(post["content"], photos)
-            post["content"] = self._scrub_content(post["content"])
-            bad = [r.get("location_name", "") for r in photos
-                   if r.get("location_name") and not r.get("name_confident")]
-            if post.get("title"):
-                post["title"] = self._scrub_title(post["title"], bad)
-            return post
-        except Exception as e:
-            logger.error(f"❌ AI 생성 오류: {e}"); return None
+        """AI 호출 + 사진 삽입 + 구글맵 링크 삽입 + 결정적 스크럽.
+        장소가 많은 그룹은 응답이 max_tokens에 잘려 JSON이 미완성으로 온다
+        (finish_reason=length, 'Unterminated string') → 분량 축소 지시를 붙여
+        최대 3회 재시도. 전부 실패하면 None(호출부가 실패로 보고해야 함)."""
+        for attempt in range(3):
+            extra = ""
+            if attempt:
+                pct = "70%" if attempt == 1 else "50%"
+                extra = (f"\n\n[중요] 직전 응답이 길이 제한으로 잘렸습니다. "
+                         f"본문 전체 분량을 {pct} 수준으로 줄이세요 — 장소별 설명을 "
+                         f"더 간결하게, 사진 설명은 1줄로. JSON을 반드시 완결하세요.")
+            try:
+                r = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role":"system","content":"인기 여행 블로거. 한글(현지어) 표기. JSON만 응답. 절대 구글맵 URL이나 이동경로 HTML을 넣지 마세요 - 자동 삽입됩니다. 사진에 보이는 사실과 제공된 장소 정보만 쓰고 확인 불가한 인테리어·재료·메뉴를 지어내지 마세요. 같은 형용사(아늑한/여유로운/편안한 등)를 반복하지 말고 장소마다 다르게 묘사하세요."},
+                        {"role":"user","content":prompt + extra}
+                    ],
+                    temperature=temperature, max_tokens=self.max_tok
+                )
+                choice = r.choices[0]
+                txt = choice.message.content.strip()
+                if "```json" in txt: txt=txt.split("```json")[1].split("```")[0].strip()
+                elif "```" in txt: txt=txt.split("```")[1].split("```")[0].strip()
+                if getattr(choice, "finish_reason", "") == "length":
+                    logger.warning(f"⚠️ AI 응답이 길이 제한으로 잘림 (시도 {attempt+1}/3) → 분량 축소 재시도")
+                    logger.warning(f"   [디버그] 응답 {len(txt)}자 | 머리: {txt[:200]!r}")
+                    logger.warning(f"   [디버그] 꼬리: {txt[-300:]!r}")
+                    continue
+                post = json.loads(txt)
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️ AI 응답 JSON 파싱 실패 (시도 {attempt+1}/3): {e}")
+                continue
+            except Exception as e:
+                logger.error(f"❌ AI 생성 오류: {e}"); return None
+            try:
+                post["content"] = self._insert_photos_with_map(post["content"], photos)
+                post["content"] = self._scrub_content(post["content"])
+                bad = [r.get("location_name", "") for r in photos
+                       if r.get("location_name") and not r.get("name_confident")]
+                if post.get("title"):
+                    post["title"] = self._scrub_title(post["title"], bad)
+                return post
+            except Exception as e:
+                logger.error(f"❌ AI 생성 후처리 오류: {e}"); return None
+        logger.error("❌ AI 생성 실패: 3회 모두 응답이 잘리거나 JSON 파싱 실패")
+        return None
 
     # ─────────────────────────────────────────
     # 하위호환: 일별 글 생성

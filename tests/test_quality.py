@@ -1121,3 +1121,59 @@ def test_normalize_naver_url():
     assert f(pv) == pv
     assert f("https://example.com/post/1") == "https://example.com/post/1"
     assert f("") == ""
+
+
+def test_call_ai_retries_on_truncated_response(monkeypatch):
+    # 장소 많은 그룹에서 응답이 max_tokens에 잘려(finish_reason=length,
+    # JSON 미완성) 2·3일차 생성이 통째로 실패하던 회귀 방지 — 잘리면 분량 축소 재시도.
+    import types, json as _json
+    g = TravelBlogGenerator(Config())
+    calls = {"n": 0, "extra_seen": False}
+    def fake(**k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(
+                message=types.SimpleNamespace(content='{"title":"오사카","content":"<p>잘린 본'),
+                finish_reason="length")])
+        # 재시도 프롬프트에 분량 축소 지시가 붙었는지 확인
+        user_msg = k["messages"][-1]["content"]
+        calls["extra_seen"] = "길이 제한으로 잘렸습니다" in user_msg
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=_json.dumps(
+                {"title": "재시도 성공", "content": "<p>본문</p>", "tags": []})),
+            finish_reason="stop")])
+    monkeypatch.setattr(g.client.chat.completions, "create", fake)
+    post = g._call_ai("프롬프트", 0.7, [])
+    assert post and post["title"] == "재시도 성공"
+    assert calls["n"] == 2 and calls["extra_seen"]
+
+
+def test_call_ai_returns_none_after_3_truncations(monkeypatch):
+    import types
+    g = TravelBlogGenerator(Config())
+    calls = {"n": 0}
+    def fake(**k):
+        calls["n"] += 1
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content='{"title":"잘림'),
+            finish_reason="length")])
+    monkeypatch.setattr(g.client.chat.completions, "create", fake)
+    assert g._call_ai("프롬프트", 0.7, []) is None
+    assert calls["n"] == 3
+
+
+def test_build_prompt_per_place_photo_mode():
+    # 사진 20장 초과 그룹: 사진별 태그 강요(응답 잘림 원인) 대신 장소당 대표 1개만.
+    g = TravelBlogGenerator(Config())
+    style = {"name": "감성", "desc": "감성적"}
+    many = ([{"location_name": "고베 거리", "file_name": f"a{i}.jpg",
+              "gps": {"lat": 34.7, "lon": 135.2}} for i in range(15)] +
+            [{"location_name": "소라쿠엔", "file_name": f"b{i}.jpg",
+              "gps": {"lat": 34.7, "lon": 135.18}} for i in range(15)])
+    p = g._build_prompt(many, "요약", "코스", "고베", "", "그룹", "제목", style, "", "")
+    assert "장소당 대표 1개만" in p
+    assert "[PHOTO:a0.jpg]" in p and "[PHOTO:b0.jpg]" in p   # 장소별 첫 사진이 대표
+    assert "정확히 30개" not in p
+    few = many[:5]
+    p2 = g._build_prompt(few, "요약", "코스", "고베", "", "그룹", "제목", style, "", "")
+    assert "정확히 5개" in p2 and "장소당 대표 1개만" not in p2

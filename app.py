@@ -919,6 +919,11 @@ def api_generate():
                 state["naver_analysis"], state["style_analysis"],
                 selected_structure=structure, route_modes=route_modes,
                 progress_cb=lambda m: state["progress"].update({"message":m}))
+            if not dr:
+                # 0개 = 실패다. "완료"로 보고하면 편집 단계에서 "못 불러온다"로 터진다
+                state["progress"] = {"status":"error",
+                    "message":"❌ AI 초안 생성 실패(응답 잘림/파싱 오류) — 다시 시도해주세요","percent":0}
+                return
             state["group_states"].setdefault(gi,{})["drafts"] = dr
             _save_drafts(gi)
             state["completed"].add(3)
@@ -955,6 +960,7 @@ def api_generate_all():
                 except Exception as _e:
                     logger.warning(f"자동 SEO 분석 실패(무시): {_e}")
             _apply_settings_to_generator()
+            failed = []
             for gi in range(total):
                 g = groups[gi]
                 state["progress"] = {"status":"generating",
@@ -967,8 +973,20 @@ def api_generate_all():
                     selected_structure=structure, route_modes=route_modes,
                     progress_cb=lambda m,_gi=gi: state["progress"].update(
                         {"message":f"[{_gi+1}/{total}] {m}"}))
-                state["group_states"].setdefault(gi,{})["drafts"] = dr
-                _save_drafts(gi)
+                if dr:
+                    state["group_states"].setdefault(gi,{})["drafts"] = dr
+                    _save_drafts(gi)
+                else:
+                    # 실패한 일차를 성공으로 숨기지 않는다 — "전체 완료" 허위 보고 금지
+                    failed.append(g.get("label", f"{gi+1}번째"))
+            if failed:
+                ok = total - len(failed)
+                if ok:
+                    state["completed"].add(3)
+                state["progress"] = {"status":"error",
+                    "message":f"❌ {', '.join(failed)} 생성 실패 — 해당 일차만 [생성]으로 다시 시도해주세요"
+                              f" (나머지 {ok}개는 완료됨)","percent":100}
+                return
             state["completed"].add(3)
             state["progress"] = {"status":"done","message":f"✅ 전체 {total}개 그룹 완료","percent":100}
         except Exception as e:
