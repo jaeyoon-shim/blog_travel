@@ -2247,7 +2247,15 @@ class TravelBlogGenerator:
         # 잘려 생성 자체가 실패한다(finish_reason=length — 34/62장 그룹 사고).
         # → 20장 초과 시 장소당 대표 태그 1개만 지시하고 나머지는 코드가 자동 배치
         #   (_insert_photos_with_map 2단계 h2 매칭). "형식은 코드가 조립" 원칙.
-        per_place_photo = len(photos) > 20
+        # 문체 프로파일이 있으면(문체 따라하기) 하드코딩 구어체 규칙이 그걸 덮지 않게 양보
+        tone_rule = ('2. ★★★ 말투: [참고 문체]가 최우선 ★★★\n'
+                     '   - 문장 어미는 [참고 문체]에 명시된 어미 패턴만 사용하세요 '
+                     '(예시에 없는 "~했어요","~답니다" 금지)\n'
+                     '   - 톤·습관도 [참고 문체]를 따르세요 — 다른 규칙의 예시 어미보다 [참고 문체]가 우선'
+                     if (style_ctx or "").strip() else
+                     '2. 말투: 친근한 구어체 "~했어요","~더라고요", 센스있는 표현')
+
+        per_place_photo = len(photos) > 40
         if per_place_photo:
             rep_tags = "\n".join(
                 f"   - {p} → [PHOTO:{fns[0]}]"
@@ -2421,12 +2429,13 @@ class TravelBlogGenerator:
 ═══════════════════════════════════════
 
 [필수 규칙]
-1. ★★★ 장소명 규칙 ★★★
+1. ★★★ 장소명·순서 규칙 ★★★
    - 반드시 "한글이름 (현지어)" 형식: 예) 시노자키 신사 (篠崎神社)
    - 로마자 절대 금지! Matsubara(X) → 마쓰바라(O)
    - [방문 장소 목록]에 없는 상호명을 새로 지어내지 마세요. 목록의 이름만 사용.
+   - 장소 섹션은 반드시 [코스]에 나온 방문 순서 그대로 작성 (순서 변경 절대 금지)
 
-2. 말투: 친근한 구어체 "~했어요","~더라고요", 센스있는 표현
+{tone_rule}
 
 3. ★★★ 장소 소개글 3~4줄 필수! (가장 중요!) ★★★
    - 장소 헤더 바로 아래, 사진 위에 반드시 3~4문장 소개글
@@ -3265,51 +3274,46 @@ class TravelBlogGenerator:
                 )
                 route_html += '\n</div>\n'
 
-            # to_place의 섹션 앞에 경로 삽입
-            # 우선순위: 1) PLACE 라벨의 div 앞  2) h2 앞  3) 구분선 앞
-            inserted_route = False
-
-            # 방법1: "PLACE" 라벨 포함 div 앞에 삽입 (data-place 속성의 h2 기준)
-            h2_pat = _re.compile(r'(<(?:div|p)[^>]*>[\s\S]*?)?(<h2[^>]*data-place="[^"]*"[^>]*>)(.*?)(</h2>)', _re.IGNORECASE | _re.DOTALL)
-            for m in h2_pat.finditer(content):
-                h2_text = _re.sub(r'<[^>]+>', '', m.group(3)).strip()
-                to_chars = set(to_place.replace(" ", ""))
-                h2_chars = set(h2_text.replace(" ", ""))
-                if not to_chars: continue
-                overlap = len(to_chars & h2_chars) / len(to_chars)
-                if overlap >= 0.4:
-                    # PLACE 라벨 div 시작점 찾기 (h2 앞의 div)
-                    search_start = max(0, m.start() - 300)
-                    before = content[search_start:m.start()]
-                    # "PLACE" 텍스트가 있는 div/p 시작 찾기
-                    place_label_m = _re.search(r'<(?:div|p)[^>]*>[^<]*PLACE\s*\d*', before, _re.IGNORECASE)
-                    if place_label_m:
-                        insert_pos = search_start + place_label_m.start()
-                    else:
-                        insert_pos = m.start()
-                    content = content[:insert_pos] + route_html + '\n' + content[insert_pos:]
-                    inserted_route = True
-                    break
-
-            # 방법2: 일반 h2 앞에 삽입
-            if not inserted_route:
-                h2_pat2 = _re.compile(r'(<h2[^>]*>)(.*?)(</h2>)', _re.IGNORECASE | _re.DOTALL)
-                for m in h2_pat2.finditer(content):
-                    h2_text = _re.sub(r'<[^>]+>', '', m.group(2)).strip()
-                    to_chars = set(to_place.replace(" ", ""))
-                    h2_chars = set(h2_text.replace(" ", ""))
-                    if not to_chars: continue
-                    overlap = len(to_chars & h2_chars) / len(to_chars)
-                    if overlap >= 0.4:
-                        content = content[:m.start()] + route_html + '\n' + content[m.start():]
-                        break
+            # to_place(목적지) 섹션 직전에 경로 삽입.
+            # ⚠ 과거 구현은 h2 앞에 `(<div|p ...>[\s\S]*?)?` 선행 그룹을 붙여
+            #   m.start()가 이전 섹션의 아무 <p>에나 앵커됨 → 카드가 출발지 사진
+            #   한복판/글 맨 앞에 꽂히는 오배치 사고("일정 순서 엉망"). 또 첫 매치
+            #   채택이라 '고베 X' 같은 유사 이름끼리 오매칭.
+            # → h2만 스캔해 "최고 일치"를 고르고, h2를 감싸는 장소 헤더 div가
+            #   바로 앞에 있으면 그 div 앞에 넣는다. 못 찾으면 조용히 생략
+            #   (엉뚱한 위치에 넣는 것보다 낫다).
+            h2_pat = _re.compile(r'<h2[^>]*>(.*?)</h2>', _re.IGNORECASE | _re.DOTALL)
+            to_chars = set(to_place.replace(" ", ""))
+            best, best_score = None, 0.0
+            if to_chars:
+                for m in h2_pat.finditer(content):
+                    h2_text = _re.sub(r'<[^>]+>', '', m.group(1)).strip()
+                    overlap = len(to_chars & set(h2_text.replace(" ", ""))) / len(to_chars)
+                    if overlap > best_score and overlap >= 0.4:
+                        best_score, best = overlap, m
+            if best is not None:
+                insert_pos = best.start()
+                # h2 직전 400자 안의 장소 헤더 div(PLACE 라벨 포함) 시작을 찾으면 그 앞에
+                win_start = max(0, insert_pos - 400)
+                window = content[win_start:insert_pos]
+                div_idx = window.rfind('<div style="text-align:center;padding:30px 0 15px">')
+                if div_idx >= 0:
+                    insert_pos = win_start + div_idx
+                content = content[:insert_pos] + route_html + '\n' + content[insert_pos:]
 
         return content
 
+    # 도로/노선명 패턴 — 캡션 부기로 가치가 없고 글을 조잡하게 만든다
+    # (예: 生田北１３９号線, 神戸方面第７号線, 天の橋立線, 千日前通, パールストリート)
+    _ROAD_NAME_PAT = re.compile(
+        r'(号線|国道|県道|府道|市道|旧道|バイパス|方面|街道$|線$|通り?$|ストリート$|[Ss]treet$)')
+
     def _display_name(self, r):
-        """사진의 표시 이름 생성"""
+        """사진의 표시 이름 생성. 세부 위치가 도로/노선명이면 부기하지 않는다."""
         loc_kr = r.get("location_name", "")
         loc_local = r.get("location_name_local", "")
+        if loc_local and self._ROAD_NAME_PAT.search(loc_local):
+            loc_local = ""
         if loc_local and loc_local != loc_kr and not self._is_same_text(loc_kr, loc_local):
             return f"{loc_kr} ({loc_local})"
         return loc_kr or loc_local or "여행지"

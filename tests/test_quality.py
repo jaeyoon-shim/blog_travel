@@ -1163,17 +1163,73 @@ def test_call_ai_returns_none_after_3_truncations(monkeypatch):
 
 
 def test_build_prompt_per_place_photo_mode():
-    # 사진 20장 초과 그룹: 사진별 태그 강요(응답 잘림 원인) 대신 장소당 대표 1개만.
+    # 사진 40장 초과 그룹: 사진별 태그 강요(응답 잘림 원인) 대신 장소당 대표 1개만.
     g = TravelBlogGenerator(Config())
     style = {"name": "감성", "desc": "감성적"}
     many = ([{"location_name": "고베 거리", "file_name": f"a{i}.jpg",
-              "gps": {"lat": 34.7, "lon": 135.2}} for i in range(15)] +
+              "gps": {"lat": 34.7, "lon": 135.2}} for i in range(25)] +
             [{"location_name": "소라쿠엔", "file_name": f"b{i}.jpg",
-              "gps": {"lat": 34.7, "lon": 135.18}} for i in range(15)])
+              "gps": {"lat": 34.7, "lon": 135.18}} for i in range(25)])
     p = g._build_prompt(many, "요약", "코스", "고베", "", "그룹", "제목", style, "", "")
     assert "장소당 대표 1개만" in p
     assert "[PHOTO:a0.jpg]" in p and "[PHOTO:b0.jpg]" in p   # 장소별 첫 사진이 대표
-    assert "정확히 30개" not in p
-    few = many[:5]
-    p2 = g._build_prompt(few, "요약", "코스", "고베", "", "그룹", "제목", style, "", "")
-    assert "정확히 5개" in p2 and "장소당 대표 1개만" not in p2
+    assert "정확히 50개" not in p
+    mid = many[:34]   # 34장(실사고 2일차 규모)은 16k 예산 안 → 사진별 설명 모드 유지
+    p2 = g._build_prompt(mid, "요약", "코스", "고베", "", "그룹", "제목", style, "", "")
+    assert "정확히 34개" in p2 and "장소당 대표 1개만" not in p2
+
+
+def test_build_prompt_tone_rule_yields_to_style():
+    # 하드코딩 구어체 규칙이 문체 따라하기([참고 문체])를 덮지 않아야 한다.
+    g = TravelBlogGenerator(Config())
+    style = {"name": "감성", "desc": "감성적"}
+    photos = [{"location_name": "고쿠라 성", "file_name": "a.jpg",
+               "gps": {"lat": 33.88, "lon": 130.87}}]
+    style_ctx = "\n[참고 문체 — 아래 규칙을 모방하되 문장을 그대로 베끼지 말 것]\n· 어미: ~였다"
+    p = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", style_ctx)
+    assert "[참고 문체]가 우선" in p and '친근한 구어체 "~했어요"' not in p
+    p2 = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "")
+    assert '친근한 구어체 "~했어요"' in p2
+    # 섹션 순서 규칙 존재
+    assert "방문 순서 그대로" in p
+
+
+def test_display_name_drops_road_names():
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    def dn(kr, local):
+        return g._display_name({"location_name": kr, "location_name_local": local})
+    # 도로/노선명 부기는 제거
+    assert dn("소라쿠엔(相楽園)", "生田北１３９号線") == "소라쿠엔(相楽園)"
+    assert dn("고베 거리 구경", "神戸方面第７号線") == "고베 거리 구경"
+    assert dn("주변 거리", "天の橋立線") == "주변 거리"
+    assert dn("간식", "千日前通") == "간식"
+    assert dn("고베 거리", "パールストリート") == "고베 거리"
+    assert dn("이네", "国道178号旧道") == "이네"
+    # 의미 있는 세부 시설명은 유지
+    assert "浣心亭" in dn("소라쿠엔(相楽園)", "浣心亭")
+    assert "股のぞき台" in dn("뷰랜드", "股のぞき台")
+
+
+def test_route_guide_inserted_before_destination_header():
+    # 경로 카드가 출발지 사진 한복판/글 맨 앞에 꽂히던 오배치 회귀 방지 —
+    # 반드시 목적지 장소 헤더(div) 직전에 삽입돼야 한다.
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    hdr = '<div style="text-align:center;padding:30px 0 15px">'
+    content = (
+        '<div>인트로</div>'
+        f'{hdr}<p>PLACE 1</p><h2>닛폰바시역</h2></div>'
+        '<p>소개A</p><figure>사진A1</figure><p>캡션A1</p><figure>사진A2</figure>'
+        f'{hdr}<p>PLACE 2</p><h2>아마노하시다테 뷰랜드</h2></div>'
+        '<p>소개B</p><figure>사진B1</figure>'
+    )
+    from collections import OrderedDict
+    pg = OrderedDict()
+    pg["닛폰바시역"] = [{"gps": {"lat": 34.66, "lon": 135.5}, "city": "오사카", "day_date": "2024-12-22"}]
+    pg["아마노하시다테 뷰랜드"] = [{"gps": {"lat": 35.56, "lon": 135.19}, "city": "미야즈", "day_date": "2024-12-22"}]
+    out = g._insert_route_guides(content, pg)
+    assert "이동" in out
+    card = out.index("이동&nbsp;")
+    # 카드는 출발지 마지막 사진(A2) 뒤, 목적지 헤더 앞
+    assert out.index("사진A2") < card < out.index("PLACE 2")
+    # 목적지 섹션 내부(소개B 앞)여야 함
+    assert card < out.index("소개B")
