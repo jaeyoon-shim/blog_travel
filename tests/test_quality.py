@@ -941,6 +941,111 @@ def test_compose_collage_fallback_none():
     assert TravelBlogGenerator._compose_collage([]) is None
 
 
+_SECTION_HEADER_DIV = '<div style="text-align:center;padding:30px 0 15px">'
+
+
+def test_insert_photos_missing_units_time_order(tmp_path):
+    """2단계 자동배치 회귀(2026-07-06 사진 순서 사고):
+    AI 태그가 없는 유닛들은 h2 직후가 아니라 그 장소 섹션 끝에
+    원래(시간) 순서 그대로 일괄 삽입돼야 한다.
+    base64 대형 figure(수백 KB)가 사이에 있어도 역순으로 쌓이면 안 된다."""
+    from PIL import Image
+    p1 = tmp_path / "p1.jpg"
+    # 실파일 → base64 인코딩된 대형 figure (1000자 창 가정을 깨는 조건)
+    Image.new("RGB", (800, 600), (10, 200, 10)).save(p1, "JPEG")
+
+    def r(fn, fp, loc):
+        return {"file_name": fn, "file_path": fp, "location_name": loc,
+                "gps": {"lat": 35.57, "lon": 135.19}}
+
+    results = [
+        r("p1.jpg", str(p1), "아마노하시다테 뷰랜드"),
+        r("p2.jpg", "missing/p2.jpg", "아마노하시다테 뷰랜드"),
+        r("p3.jpg", "missing/p3.jpg", "아마노하시다테 뷰랜드"),
+        r("p4.jpg", "missing/p4.jpg", "아마노하시다테 뷰랜드"),
+        r("p5.jpg", "missing/p5.jpg", "아마노하시다테 뷰랜드"),
+        r("p6.jpg", "missing/p6.jpg", "이네노후나야"),
+    ]
+    content = (
+        f'{_SECTION_HEADER_DIV}<h2>아마노하시다테 뷰랜드</h2></div>'
+        '<p>뷰랜드 소개 문단입니다.</p>'
+        '<p>[PHOTO:p1.jpg] 리프트를 타고 올라간 첫 장면.</p>'
+        f'{_SECTION_HEADER_DIV}<h2>이네노후나야</h2></div>'
+        '<p>[PHOTO:p6.jpg] 후나야 마을.</p>'
+    )
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    out = g._insert_photos_with_map(content, results)
+
+    # 누락 4장 전부 삽입 (src의 file:/// 폴백 경로로 식별)
+    pos = [out.find(f"missing/{fn}") for fn in
+           ["p2.jpg", "p3.jpg", "p4.jpg", "p5.jpg"]]
+    assert all(p >= 0 for p in pos)
+    # ① 시간순 보존: p2 < p3 < p4 < p5
+    assert pos == sorted(pos), "자동배치 사진이 시간 역순으로 쌓임"
+    # ② 소개글·앵커 첫 사진보다 뒤 (h2 직후에 끼어들지 않음)
+    assert out.find("뷰랜드 소개 문단") < pos[0]
+    assert out.find("리프트를 타고") < pos[0]
+    # ③ 다음 장소 섹션 헤더(div)보다는 앞
+    next_header = out.find("<h2>이네노후나야")
+    assert all(p < next_header for p in pos)
+
+
+def test_insert_photos_sparse_and_disordered_ai_tags(tmp_path):
+    """AI가 태그를 듬성듬성·역순으로 달아도 코드가 EXIF 순서를 강제한다.
+    시나리오: p1~p5 중 AI가 p4 태그만 중간에, p2 태그를 그 뒤(역전)에 배치.
+    기대: p2 태그는 무시(강등)되고 p2·p3이 p4 앞에 병합 → 최종 p1<p2<p3<p4<p5."""
+    def r(fn, loc):
+        return {"file_name": fn, "file_path": f"missing/{fn}",
+                "location_name": loc, "gps": {"lat": 35.57, "lon": 135.19}}
+
+    results = [r(f"p{i}.jpg", "아마노하시다테 뷰랜드") for i in range(1, 6)]
+    results.append(r("p6.jpg", "이네노후나야"))
+    content = (
+        f'{_SECTION_HEADER_DIV}<h2>아마노하시다테 뷰랜드</h2></div>'
+        '<p>뷰랜드 소개 문단입니다.</p>'
+        '<p>[PHOTO:p1.jpg] 도착한 첫 장면.</p>'
+        '<p>[PHOTO:p4.jpg] 전망대에서 본 풍경.</p>'
+        '<p>[PHOTO:p2.jpg] 역전된 태그.</p>'  # p4보다 뒤 = EXIF 역전 → 무시돼야 함
+        f'{_SECTION_HEADER_DIV}<h2>이네노후나야</h2></div>'
+        '<p>[PHOTO:p6.jpg] 후나야 마을.</p>'
+    )
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    out = g._insert_photos_with_map(content, results)
+
+    pos = [out.find(f"missing/p{i}.jpg") for i in range(1, 6)]
+    assert all(p >= 0 for p in pos), "5장 전부 삽입돼야 한다"
+    assert pos == sorted(pos), f"EXIF 순서가 깨짐: {pos}"
+    assert "[PHOTO:" not in out
+    # p2·p3은 p4 앵커 앞(= '전망대에서' 설명 문단 앞)에 병합된다
+    assert pos[1] < out.find("전망대에서 본 풍경")
+    assert out.find("뷰랜드 소개 문단") < pos[0]
+
+
+def test_section_end_pos_pure():
+    """_section_end_pos: 다음 h2의 헤더 div 직전 → 마커 앞 → 본문 끝 순 폴백."""
+    f = TravelBlogGenerator._section_end_pos
+    # 다음 h2가 헤더 div로 감싸져 있으면 div 직전
+    c = (f'{_SECTION_HEADER_DIV}<h2>A</h2></div><p>본문A</p>'
+         f'{_SECTION_HEADER_DIV}<h2>B</h2></div><p>본문B</p>')
+    h2_end = c.find('</h2>') + len('</h2>')
+    assert f(c, h2_end) == c.find(_SECTION_HEADER_DIV, 1)
+    # 헤더 div 없으면 다음 h2 직전
+    c2 = '<h2>A</h2><p>본문A</p><h2>B</h2>'
+    assert f(c2, c2.find('</h2>') + 5) == c2.find('<h2>B')
+    # 다음 h2 없으면 TIPS/아웃트로 마커 앞
+    c3 = '<h2>A</h2><p>본문A</p><div class="travel-tips">팁</div>'
+    assert f(c3, c3.find('</h2>') + 5) == c3.find('<div class="travel-tips">')
+    # 텍스트 마커가 헤딩 태그 내부면 래퍼 div 앞으로 되짚는다 (태그 깨짐 방지)
+    c5 = ('<h2>A</h2><p>본문A</p>'
+          '<div style="text-align:center;padding:20px 0">'
+          '<p>TRAVEL TIPS</p><h3>🧳 여행 꿀팁</h3><p>팁1</p></div>')
+    assert f(c5, c5.find('</h2>') + 5) == c5.find(
+        '<div style="text-align:center;padding:20px 0">')
+    # 아무것도 없으면 본문 끝
+    c4 = '<h2>A</h2><p>본문A</p>'
+    assert f(c4, c4.find('</h2>') + 5) == len(c4)
+
+
 def test_insert_photos_with_map_collages_same_place(tmp_path):
     from PIL import Image
     p1 = tmp_path / "a.jpg"
