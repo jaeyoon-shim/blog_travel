@@ -1069,6 +1069,57 @@ def test_insert_photos_with_map_collages_same_place(tmp_path):
     assert "오타루 운하" in out                 # 캡션 라인 유지
 
 
+def test_photo_html_data_files_attr():
+    """콜라주/사진 figure는 구성 원본 파일명을 data-files로 실어 발행 시
+    순서대로 in-place 전개되게 한다(2026-07-06 발행 순서 사고)."""
+    g = TravelBlogGenerator.__new__(TravelBlogGenerator)
+    html = g._photo_html("collage.jpg", "오타루 운하", None,
+                          show_map=False, src_files=["a.jpg", "b.jpg"])
+    assert 'data-files="a.jpg|b.jpg"' in html
+    # src_files 없으면 속성 미출력(기존 동작 유지)
+    html2 = g._photo_html("x.jpg", "장소", None, show_map=False)
+    assert "data-files" not in html2
+
+
+def test_html_to_blocks_preserves_photo_order_via_data_files(tmp_path):
+    """발행 라운드트립(html_to_blocks)이 계획/EXIF 사진 순서를 보존한다.
+    옛 버그: 콜라주 figure가 alt로 1장만 매칭 → 잔여 사진이 '장소명 포함
+    첫 텍스트' 뒤로 덤프되는데, 인트로 코스라인이 모든 장소명을 담고 있어
+    전부 글 맨 위로 쏟아졌다."""
+    from posters import html_to_blocks
+    photos = [
+        {"file_name": "p1.jpg", "file_path": "u/p1.jpg", "location_name": "장소A"},
+        {"file_name": "p2.jpg", "file_path": "u/p2.jpg", "location_name": "장소A"},
+        {"file_name": "p3.jpg", "file_path": "u/p3.jpg", "location_name": "장소B"},
+        {"file_name": "p4.jpg", "file_path": "u/p4.jpg", "location_name": "장소B"},
+    ]
+    content = (
+        '<p>코스: 장소A → 장소B</p>'  # 모든 장소명 포함 = 옛 버그의 덤프 지점
+        '<h2>장소A</h2>'
+        '<figure data-files="p1.jpg|p2.jpg">'
+        '<img src="data:image/jpeg;base64,QQ==" alt="장소A"/></figure>'
+        '<p>장소A 설명</p>'
+        '<h2>장소B</h2>'
+        '<figure data-files="p3.jpg|p4.jpg">'
+        '<img src="data:image/jpeg;base64,QQ==" alt="장소B"/></figure>'
+        '<p>장소B 설명</p>'
+    )
+    blocks = html_to_blocks(content, photos)
+    seq = [b["path"] for b in blocks if b["type"] == "image"]
+    assert seq == ["u/p1.jpg", "u/p2.jpg", "u/p3.jpg", "u/p4.jpg"], seq
+
+    def ipath(p):
+        return next(i for i, b in enumerate(blocks)
+                    if b["type"] == "image" and b["path"] == p)
+
+    def ihead(h):
+        return next(i for i, b in enumerate(blocks)
+                    if b["type"] == "heading" and b["content"] == h)
+
+    assert ihead("장소A") < ipath("u/p1.jpg") < ipath("u/p2.jpg") < ihead("장소B")
+    assert ihead("장소B") < ipath("u/p3.jpg") < ipath("u/p4.jpg")
+
+
 # ── I2: 구글맵 장소 OG 카드 — place_id 보존·MAPCARD 마커 ──
 def test_photo_html_no_marker_without_place_id():
     g = TravelBlogGenerator.__new__(TravelBlogGenerator)

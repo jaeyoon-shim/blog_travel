@@ -2851,7 +2851,7 @@ class TravelBlogGenerator:
                              if u.get("place_id") else None)
             return self._photo_html(
                 u["fp"], u["display"], u["gps"], show_map=u["show_map"],
-                map_card_url=map_card_url)
+                map_card_url=map_card_url, src_files=u["file_names"])
 
         units_by_place = OrderedDict()
         for u in units:
@@ -3413,8 +3413,12 @@ class TravelBlogGenerator:
             return f"{loc_kr} ({loc_local})"
         return loc_kr or loc_local or "여행지"
 
-    def _photo_html(self, fp, display, gps, show_map=True, map_card_url=None):
-        """단일 사진의 HTML 생성 — EXIF 방향 보정 + base64 인코딩"""
+    def _photo_html(self, fp, display, gps, show_map=True, map_card_url=None,
+                    src_files=None):
+        """단일 사진(또는 콜라주) HTML 생성 — EXIF 방향 보정 + base64 인코딩.
+        src_files: 이 figure를 구성하는 원본 파일명 목록(순서 유지). 발행기
+        (html_to_blocks)가 이 목록으로 figure를 제자리에서 개별 사진으로 전개해
+        네이버 발행 순서를 계획/EXIF 그대로 보존한다(콜라주 alt 재매칭 폐기)."""
         import base64, mimetypes, io
 
         img_src = f"file:///{fp}"  # fallback
@@ -3437,8 +3441,13 @@ class TravelBlogGenerator:
         except Exception as e:
             logger.warning(f"⚠️ 이미지 인코딩 실패: {fp}: {e}")
 
+        data_attr = ""
+        if src_files:
+            # 파일명에 '|'는 없다고 가정(secure_filename 통과분). 발행 시 이 목록
+            # 순서대로 개별 image 블록으로 전개된다.
+            data_attr = ' data-files="' + "|".join(src_files) + '"'
         img_html = (
-            f'\n<figure style="text-align:center;margin:24px 0">'
+            f'\n<figure style="text-align:center;margin:24px 0"{data_attr}>'
             f'<img src="{img_src}" alt="{display}" '
             f'style="max-width:100%;border-radius:12px;'
             f'box-shadow:0 4px 15px rgba(0,0,0,.15)"/>'

@@ -50,6 +50,7 @@ def html_to_blocks(html_content, photos=None):
     # 사진 매핑 준비: alt → file_path, 순서 인덱스 → file_path
     photo_paths = []
     photo_by_alt = {}  # alt키워드 → file_path
+    file_to_path = {}  # 파일명 → file_path (data-files 전개용)
     if photos:
         for p in photos:
             fp = p.get("file_path", "")
@@ -63,6 +64,7 @@ def html_to_blocks(html_content, photos=None):
                     photo_by_alt[loc].append(fp)
                 if fn:
                     photo_by_alt[fn] = [fp]
+                    file_to_path[fn] = fp
 
     # ── 특수 요소 위치 기록 ──
     special_ranges = []
@@ -93,7 +95,24 @@ def html_to_blocks(html_content, photos=None):
     for m in _re.finditer(
         r'<figure[^>]*>.*?</figure>',
         html_content, _re.DOTALL | _re.IGNORECASE):
-        src_m = _re.search(r'src=["\']([^"\']+)["\']', m.group())
+        fig = m.group()
+        # data-files: 콜라주/사진 figure를 구성 원본사진들로 "제자리 순서대로" 전개.
+        # (alt 재매칭+잔여 덤프 경로를 우회 — 인트로 코스라인이 모든 장소명을
+        #  포함해 잔여사진이 글 맨 위로 쏟아지던 발행 순서 사고 방지, 2026-07-06)
+        df = _re.search(r'data-files=["\']([^"\']*)["\']', fig)
+        if df and df.group(1).strip():
+            exp_paths = []
+            for tok in df.group(1).split('|'):
+                tok = tok.strip()
+                fp = file_to_path.get(tok)
+                if fp and fp not in used_paths:
+                    used_paths.add(fp)
+                    exp_paths.append(fp)
+            if exp_paths:
+                special_ranges.append((m.start(), m.end(),
+                    {"type": "images", "paths": exp_paths}))
+                continue
+        src_m = _re.search(r'src=["\']([^"\']+)["\']', fig)
         if not src_m:
             continue
         src = src_m.group(1)
@@ -286,6 +305,10 @@ def html_to_blocks(html_content, photos=None):
 
         if block_data["type"] == "image":
             blocks.append(block_data)
+        elif block_data["type"] == "images":
+            # data-files 전개: 구성 사진들을 순서대로 개별 image 블록으로
+            for _fp in block_data["paths"]:
+                blocks.append({"type": "image", "path": _fp})
         elif block_data["type"] == "map_link":
             blocks.append(block_data)
         elif block_data["type"] == "map_card":
