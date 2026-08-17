@@ -444,25 +444,55 @@ def api_analyze():
 
 
 # ── 사진 ──
+# 썸네일 캐시 — 키: (경로, mtime, 크기). 파일이 바뀌면 자동 무효화된다.
+# 캐시 전에는 호출마다 109장을 디스크에서 다시 인코딩해 /api/photos가 7.7초 걸렸고,
+# 그동안 계획검수 화면이 "불러오는 중"에 묶였다.
+_THUMB_CACHE = {}
+_THUMB_CACHE_MAX = 2000
+
+
+def _thumbnail_data_uri(fp):
+    """사진 경로 → 200px 썸네일 data URI(캐시). 실패하면 빈 문자열."""
+    if not fp or not os.path.exists(fp):
+        return ""
+    try:
+        st = os.stat(fp)
+        key = (fp, int(st.st_mtime), st.st_size)
+    except OSError:
+        return ""
+    hit = _THUMB_CACHE.get(key)
+    if hit is not None:
+        return hit
+    thumb = ""
+    try:
+        from PIL import Image, ImageOps
+        import io
+        with Image.open(fp) as img:          # with 필수 — Windows 핸들 누수 방지
+            try: img = ImageOps.exif_transpose(img)
+            except Exception: pass
+            img.thumbnail((200, 200))
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=60)
+        thumb = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
+    except Exception:
+        return ""
+    if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
+        _THUMB_CACHE.clear()                 # 단순 정책 — 여행 하나가 수백 장 규모
+    _THUMB_CACHE[key] = thumb
+    return thumb
+
+
 @app.route('/api/photos')
 def api_photos():
     from core import TripPlanner
+    # thumbs=0이면 썸네일 없이 즉시 응답(계획 화면이 먼저 뜨게)
+    want_thumbs = request.args.get("thumbs", "1") != "0"
     results = []
     for r in state["photo_results"]:
-        thumb = ""
         fp = r.get("file_path", "")
-        if fp and os.path.exists(fp):
-            try:
-                from PIL import Image, ImageOps
-                import io
-                img = Image.open(fp)
-                try: img = ImageOps.exif_transpose(img)
-                except: pass
-                img.thumbnail((200, 200))
-                buf = io.BytesIO()
-                img.save(buf, format='JPEG', quality=60)
-                thumb = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
-            except: pass
+        thumb = _thumbnail_data_uri(fp) if want_thumbs else ""
         results.append({
             "pid": TripPlanner._photo_id(fp),
             "file_name": r.get("file_name",""), "location_name": r.get("location_name",""),
