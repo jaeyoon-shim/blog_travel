@@ -1653,8 +1653,17 @@ class TripPlanner:
         groups = []
         for d in plan.get("days", []):
             photos, memos, directives, meta, names = [], {}, {}, {}, []
+            seen_names = {}
             for s in d.get("stops", []):
-                name = s.get("name", "") or "미확인"
+                raw = s.get("name", "") or "미확인"
+                # 같은 날 같은 이름이 두 번 나오면 = 재방문(세션 클러스터링이 분리한
+                # 별개 방문). 이름이 같으면 하류가 전부 name 키로 묶어(place_groups,
+                # 프롬프트 장소목록, memos/meta dict) 두 방문이 한 섹션으로 재병합되고
+                # 메모·별점은 뒤엣것이 앞엣것을 덮어썼다 → 표시 이름을 구분한다.
+                seen_names[raw] = seen_names.get(raw, 0) + 1
+                n_th = seen_names[raw]
+                name = raw if n_th == 1 else (
+                    f"{raw} (재방문)" if n_th == 2 else f"{raw} (재방문 {n_th - 1})")
                 if name not in names:
                     names.append(name)
                 bits = []
@@ -1680,8 +1689,8 @@ class TripPlanner:
                         continue
                     rc2 = dict(r)
                     if s.get("name"):
-                        rc2["location_name"] = s["name"]
-                    photos.append(rc2)
+                        rc2["location_name"] = name   # 재방문 구분 이름과 동일해야
+                    photos.append(rc2)                # 하류 장소 그룹핑이 맞는다
             if not photos:
                 continue
             groups.append({
@@ -1695,32 +1704,86 @@ class TripPlanner:
             })
         return groups
 
+    # 세션 클러스터링 임계 — 사용자가 확정한 plan stop을 정답으로 두고 실측 튜닝
+    # (6개 일차, 사진 쌍 F1: 이름키+격자 0.456 → 45분/300m 0.940). 300m는 뚜렷한
+    # 최적(200m 0.815 / 500m 0.797), 시간은 30~60분 고원이라 45분 채택.
+    STOP_GAP_MIN = 45
+    STOP_DIST_M = 300
+
     @staticmethod
-    def _stops_for_day(items):
-        """하루치 (pid, photo) 튜플 → 장소(stop) 목록.
-        확신 이름=이름별, 무확신+GPS=근접 클러스터(~110m), GPS없음=개별. 입력 비변형."""
-        groups = []       # [[key, name, [pids]]]
-        index = {}        # key -> groups idx
-        for pid, p in items:
-            loc = p.get("location_name", "")
-            conf = p.get("name_confident")
-            if conf and loc:
-                key = "name:" + loc          # 확신 → 이름으로 묶기
-            else:
-                g = p.get("gps") or {}
-                lat, lon = g.get("lat"), g.get("lon")
-                if lat is not None and lon is not None:
-                    key = "gps:%.3f,%.3f" % (round(lat, 3), round(lon, 3))
-                else:
-                    key = "solo:%d" % len(groups)
-            disp = loc                        # 표시 이름: 확신 아니어도 중립명 사용
-            if key in index:
-                groups[index[key]][2].append(pid)
-            else:
-                index[key] = len(groups)
-                groups.append([key, disp, [pid]])
+    def _exif_seconds(exif_date):
+        """'2024:12:21 17:30:57' → 비교용 절대 초(순수함수). 실패 시 None.
+        차이 계산에만 쓰므로 달력 정확도는 불필요(월 경계 오차는 임계 초과라 무해)."""
+        m = re.search(r'(\d{4})[:\-/](\d{2})[:\-/](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?',
+                      exif_date or "")
+        if not m:
+            return None
+        y, mo, d, hh, mi = (int(m.group(i)) for i in range(1, 6))
+        ss = int(m.group(6) or 0)
+        return ((((y * 12 + mo) * 31 + d) * 24 + hh) * 60 + mi) * 60 + ss
+
+    @staticmethod
+    def _stop_name(photos):
+        """클러스터 대표 이름 — 확신 이름 최빈, 없으면 전체 최빈(빈 값 제외)."""
+        from collections import Counter
+        conf = [p.get("location_name", "") for p in photos
+                if p.get("name_confident") and p.get("location_name")]
+        pool = conf or [p.get("location_name", "") for p in photos
+                        if p.get("location_name")]
+        return Counter(pool).most_common(1)[0][0] if pool else ""
+
+    @staticmethod
+    def _stops_for_day(items, gap_min=None, dist_m=None):
+        """하루치 (pid, photo) 튜플 → 장소(stop) 목록. 입력 비변형.
+
+        시간순으로 훑으며 직전 사진과 (시간차 ≤ gap AND 거리 ≤ dist)면 같은 stop
+        으로 잇는 **세션 클러스터링**. 사람이 "한 장소"라고 부르는 것 = 그 자리에
+        머무는 동안의 연속 촬영이라는 관찰에 기반한다.
+
+        ⚠ 과거 구현은 '이름 우선 + ~110m 격자'였다. 무료 모드의 역지오코딩 세부명이
+          같은 장소 안에서 관광지/공원/거리/신사/주차장으로 갈리고 격자 경계까지
+          겹쳐 장소가 심하게 과분할됐다(실측: 62장 하루가 자동 31개 stop → 사용자가
+          손으로 6개로 정리). 시간·거리는 이름 품질과 무관해 무료 모드에서 특히 강하다.
+        """
+        gap = (TripPlanner.STOP_GAP_MIN if gap_min is None else gap_min) * 60
+        dist = TripPlanner.STOP_DIST_M if dist_m is None else dist_m
+
+        # 시간순 정렬(호출부가 정렬을 보장하지 않음). 시간 없는 사진은 원래 순서 유지.
+        ordered = sorted(
+            enumerate(items),
+            key=lambda t: (TripPlanner._exif_seconds(t[1][1].get("exif_date", ""))
+                           is None,
+                           TripPlanner._exif_seconds(t[1][1].get("exif_date", "")) or 0,
+                           t[0]))
+        ordered = [it for _, it in ordered]
+
+        groups = []       # [{"pids": [...], "photos": [...], "t":, "lat":, "lon":}]
+        for pid, p in ordered:
+            g = p.get("gps") or {}
+            lat, lon = g.get("lat"), g.get("lon")
+            t = TripPlanner._exif_seconds(p.get("exif_date", ""))
+            if groups:
+                cur = groups[-1]
+                same = True
+                if t is not None and cur["t"] is not None:
+                    same = same and abs(t - cur["t"]) <= gap
+                if lat is not None and cur["lat"] is not None:
+                    same = same and TripStructurer._haversine(
+                        cur["lat"], cur["lon"], lat, lon) <= dist
+                elif (lat is None) != (cur["lat"] is None):
+                    same = False          # GPS 유/무가 갈리면 판단 불가 → 분리
+                if same:
+                    cur["pids"].append(pid)
+                    cur["photos"].append(p)
+                    if t is not None: cur["t"] = t
+                    if lat is not None: cur["lat"], cur["lon"] = lat, lon
+                    continue
+            groups.append({"pids": [pid], "photos": [p],
+                           "t": t, "lat": lat, "lon": lon})
+
         stops = []
-        for order, (key, name, pids) in enumerate(groups, 1):
+        for order, grp in enumerate(groups, 1):
+            pids, name = grp["pids"], TripPlanner._stop_name(grp["photos"])
             stops.append({
                 "stop_id": "s" + pids[0][1:],
                 "order": order,

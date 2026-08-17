@@ -246,7 +246,10 @@ def test_build_draft_days_and_unconfident_name_blanked():
     assert "동네 카페" in names and names["동네 카페"] == "auto"
 
 
-def test_build_draft_merges_same_name_and_no_mutation():
+def test_build_draft_splits_revisit_and_no_mutation():
+    # 2026-08-17 계약 변경: 같은 이름이라도 9시간 뒤 재방문은 **별도 stop**.
+    # (옛 계약은 이름만 같으면 무조건 병합 → 비연속 재방문이 한 섹션으로 뭉쳐
+    #  본문이 시간순을 잃었다. 세션 클러스터링으로 방문 단위 분리.)
     photos = [
         _pr("u/x.jpg", "2026:06:22 09:00:00", "스타벅스 삿포로", True),
         _pr("u/y.jpg", "2026:06:22 18:00:00", "스타벅스 삿포로", True),
@@ -254,7 +257,14 @@ def test_build_draft_merges_same_name_and_no_mutation():
     plan = TripPlanner.build_draft(photos)
     stops = plan["days"][0]["stops"]
     same = [s for s in stops if s["name"] == "스타벅스 삿포로"]
-    assert len(same) == 1 and len(same[0]["photo_ids"]) == 2
+    assert len(same) == 2 and all(len(s["photo_ids"]) == 1 for s in same)
+    # 같은 방문(20분 이내, 같은 자리)이면 한 stop
+    photos2 = [
+        _pr("u/x.jpg", "2026:06:22 09:00:00", "스타벅스 삿포로", True, 43.06, 141.35),
+        _pr("u/y.jpg", "2026:06:22 09:20:00", "스타벅스 삿포로", True, 43.06, 141.35),
+    ]
+    st2 = TripPlanner.build_draft(photos2)["days"][0]["stops"]
+    assert len(st2) == 1 and len(st2[0]["photo_ids"]) == 2
     # 입력 dict가 변형되지 않아야 함 (_pid 누출 금지)
     assert "_pid" not in photos[0]
 
@@ -418,13 +428,14 @@ def test_stops_group_by_gps_when_unnamed():
     # a,b 는 한 stop(사진 2장), c 는 별도 stop
     sizes = sorted(len(s["photo_ids"]) for s in stops)
     assert sizes == [1, 2], sizes
-    # 확신 이름이 있으면 이름으로 묶임(기존 유지)
+    # 2026-08-17: 이름이 같아도 시간·거리가 멀면 별도 stop(같은 이름의 다른 방문).
+    # 이름 품질에 의존하지 않는 게 무료 모드에서 특히 중요하다.
     photos2 = [
         _pr("u/x.jpg", "2026:06:22 09:00:00", "스타벅스", True, 1.0, 1.0),
-        _pr("u/y.jpg", "2026:06:22 18:00:00", "스타벅스", True, 9.0, 9.0),  # 이름 같으면 위치 달라도 묶임
+        _pr("u/y.jpg", "2026:06:22 18:00:00", "스타벅스", True, 9.0, 9.0),
     ]
     st2 = TripPlanner.build_draft(photos2)["days"][0]["stops"]
-    assert len(st2) == 1 and len(st2[0]["photo_ids"]) == 2
+    assert len(st2) == 2 and all(len(s["photo_ids"]) == 1 for s in st2)
 
 
 def test_stops_fill_neutral_name_when_unconfident():
@@ -1453,3 +1464,111 @@ def test_selenium_post_reports_block_progress(monkeypatch):
                     progress_cb=lambda m, pct=None: msgs.append((m, pct)))
     assert r["success"] is False
     assert msgs and msgs[0][1] == 2 and "준비" in msgs[0][0]
+
+
+# ── 계획검수 stop 세션 클러스터링 (2026-08-17) ──
+def _ph(name, t, lat, lon, conf=False):
+    return {"location_name": name, "exif_date": t, "name_confident": conf,
+            "gps": {"lat": lat, "lon": lon} if lat is not None else None}
+
+
+def test_exif_seconds_parse():
+    f = TripPlanner._exif_seconds
+    assert f("2024:12:21 17:30:57") is not None
+    assert f("2024-12-21T17:30") is not None
+    assert f("") is None and f(None) is None and f("2024:12:21") is None
+    # 같은 날 시간차가 초 단위로 정확
+    assert f("2024:12:21 17:30:57") - f("2024:12:21 17:00:57") == 1800
+    # 날짜 경계(자정 넘김)도 양수 차이
+    assert f("2024:12:22 00:10:00") - f("2024:12:21 23:50:00") == 1200
+
+
+def test_stops_merge_same_session_despite_name_noise():
+    """같은 장소 연속 촬영은 역지오코딩 세부명이 갈려도 한 stop (과분할 수정)."""
+    items = [
+        ("p1", _ph("文珠, 미야즈시 관광지", "2024:12:23 10:30:00", 35.5600, 135.1900)),
+        ("p2", _ph("文珠, 미야즈시 공원",   "2024:12:23 10:36:00", 35.5601, 135.1902)),
+        ("p3", _ph("股のぞき台",           "2024:12:23 10:44:00", 35.5603, 135.1905)),
+        ("p4", _ph("文珠, 미야즈시 거리",   "2024:12:23 11:02:00", 35.5602, 135.1901)),
+    ]
+    stops = TripPlanner._stops_for_day(items)
+    assert len(stops) == 1
+    assert stops[0]["photo_ids"] == ["p1", "p2", "p3", "p4"]
+
+
+def test_stops_split_on_time_gap_and_distance():
+    base = ("2024:12:23 10:30:00", 35.5600, 135.1900)
+    # 시간 갭(2시간) → 분리
+    items = [("p1", _ph("A", *base)),
+             ("p2", _ph("A", "2024:12:23 12:40:00", 35.5600, 135.1900))]
+    assert len(TripPlanner._stops_for_day(items)) == 2
+    # 거리(약 2km) → 분리
+    items = [("p1", _ph("A", *base)),
+             ("p2", _ph("A", "2024:12:23 10:35:00", 35.5780, 135.1900))]
+    assert len(TripPlanner._stops_for_day(items)) == 2
+    # 임계 직전(20분·근접)은 유지
+    items = [("p1", _ph("A", *base)),
+             ("p2", _ph("B", "2024:12:23 10:50:00", 35.5601, 135.1901))]
+    assert len(TripPlanner._stops_for_day(items)) == 1
+
+
+def test_stops_sort_by_time_and_do_not_mutate_input():
+    items = [
+        ("p2", _ph("B", "2024:12:23 12:00:00", 35.60, 135.20)),
+        ("p1", _ph("A", "2024:12:23 09:00:00", 35.50, 135.10)),
+    ]
+    snapshot = [dict(p) for _, p in items]
+    stops = TripPlanner._stops_for_day(items)
+    assert [s["photo_ids"][0] for s in stops] == ["p1", "p2"]   # 시간순 재정렬
+    assert [dict(p) for _, p in items] == snapshot               # 입력 비변형
+
+
+def test_stop_name_prefers_confident():
+    photos = [_ph("中央区, 거리", "", 0, 0), _ph("소라쿠엔", "", 0, 0, conf=True),
+              _ph("中央区, 공원", "", 0, 0)]
+    assert TripPlanner._stop_name(photos) == "소라쿠엔"
+    # 확신 이름이 없으면 최빈 중립명
+    photos = [_ph("거리", "", 0, 0), _ph("공원", "", 0, 0), _ph("공원", "", 0, 0)]
+    assert TripPlanner._stop_name(photos) == "공원"
+    assert TripPlanner._stop_name([]) == ""
+
+
+def test_stops_gps_missing_photo_is_separated():
+    items = [("p1", _ph("A", "2024:12:23 10:30:00", 35.56, 135.19)),
+             ("p2", {"location_name": "B", "exif_date": "2024:12:23 10:35:00",
+                     "gps": None})]
+    assert len(TripPlanner._stops_for_day(items)) == 2
+
+
+def test_plan_to_groups_distinguishes_revisit_stops():
+    """같은 날 같은 이름 stop(재방문)이 하류에서 한 장소로 재병합되지 않아야 한다."""
+    plan = {"days": [{"day_no": 1, "date": "2026-06-22", "stops": [
+        {"name": "연화의탕", "photo_ids": ["p1"], "events": ["아침 입욕"],
+         "rating": 4, "ai_instruction": "아침 지시"},
+        {"name": "이자카야", "photo_ids": ["p2"], "events": []},
+        {"name": "연화의탕", "photo_ids": ["p3"], "events": ["밤 입욕"],
+         "rating": 5, "ai_instruction": "밤 지시"},
+    ]}]}
+    prs = [{"file_path": "u/a.jpg", "file_name": "a.jpg"},
+           {"file_path": "u/b.jpg", "file_name": "b.jpg"},
+           {"file_path": "u/c.jpg", "file_name": "c.jpg"}]
+    for pid, r in zip(["p1", "p2", "p3"], prs):
+        r["file_path"] = "u/" + pid + ".jpg"
+    # pid 계산과 맞추기 위해 실제 _photo_id 사용
+    ids = [TripPlanner._photo_id(r["file_path"]) for r in prs]
+    plan["days"][0]["stops"][0]["photo_ids"] = [ids[0]]
+    plan["days"][0]["stops"][1]["photo_ids"] = [ids[1]]
+    plan["days"][0]["stops"][2]["photo_ids"] = [ids[2]]
+
+    g = TripPlanner.groups_from_plan(plan, prs)[0]
+    locs = [p["location_name"] for p in g["photos"]]
+    assert locs == ["연화의탕", "이자카야", "연화의탕 (재방문)"]
+    # 코스라인도 방문 순서 그대로 (A → B → A 재방문)
+    assert g["course_line"] == "연화의탕 → 이자카야 → 연화의탕 (재방문)"
+    # 메모·지시·별점이 서로 덮어쓰지 않는다
+    assert "아침 입욕" in g["place_memos"]["연화의탕"]
+    assert "밤 입욕" in g["place_memos"]["연화의탕 (재방문)"]
+    assert g["place_directives"]["연화의탕"] == "아침 지시"
+    assert g["place_directives"]["연화의탕 (재방문)"] == "밤 지시"
+    assert g["place_meta"]["연화의탕"]["rating"] == 4
+    assert g["place_meta"]["연화의탕 (재방문)"]["rating"] == 5
