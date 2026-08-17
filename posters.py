@@ -373,6 +373,18 @@ def html_to_blocks(html_content, photos=None):
     return blocks
 
 
+def publish_progress(done, total, lo=10, hi=90):
+    """블록 삽입 진행도 → 전체 발행 퍼센트(lo~hi 구간에 선형 매핑).
+
+    순수함수 — 발행 UI가 "발행 준비 중"에서 멈춘 것처럼 보이던 문제(2026-07-06)
+    수정의 진행률 계산부. 네트워크/Selenium 없이 단독 테스트 가능.
+    """
+    if total <= 0:
+        return hi
+    d = max(0, min(int(done), int(total)))
+    return lo + int((hi - lo) * d / total)
+
+
 def _html_to_text_with_links(html):
     """HTML → 텍스트 변환 (네이버 에디터 최적화)
     - 구글맵 링크: map_link 블록에서 처리하므로 텍스트에서 완전 제거
@@ -1235,11 +1247,18 @@ class NaverSeleniumPoster(_SeleniumBase):
             logger.info(f"  태그 {len(tags[:10])}개 입력")
 
     # ── 메인 발행 ──
-    def post(self, data, visibility="private", schedule=None):
+    def post(self, data, visibility="private", schedule=None, progress_cb=None):
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
 
+        def _prog(msg, pct=None):
+            """진행 상황 보고 — 콜백 실패가 발행을 죽이면 안 되므로 전부 흡수."""
+            if progress_cb:
+                try: progress_cb(msg, pct)
+                except Exception: pass
+
+        _prog("브라우저 준비 중...", 2)
         if not self._ensure_driver():
             return {"success": False,
                     "reason": "WebDriver 실패"}
@@ -1254,11 +1273,13 @@ class NaverSeleniumPoster(_SeleniumBase):
 
         try:
             write_url = "https://blog.naver.com/GoBlogWrite.naver"
+            _prog("네이버 에디터 여는 중...", 4)
             self.driver.get(write_url)
             time.sleep(4)
 
             # 로그인 확인
             if "nidlogin" in self.driver.current_url or "login" in self.driver.current_url:
+                _prog("로그인 필요 — 브라우저에서 로그인해 주세요", 5)
                 self._try_login()
                 if "nidlogin" in self.driver.current_url:
                     return {"success": False, "reason": "로그인 실패"}
@@ -1277,6 +1298,7 @@ class NaverSeleniumPoster(_SeleniumBase):
             self._screenshot("editor")
 
             # 제목
+            _prog("제목 입력 중...", 8)
             self._input_title(title)
             self._screenshot("title")
 
@@ -1289,11 +1311,21 @@ class NaverSeleniumPoster(_SeleniumBase):
             time.sleep(0.3)
 
             # 경로 이미지 사전 생성
+            _prog("경로 지도 준비 중...", 10)
             route_images = self._generate_route_images(blocks)
 
             # 블록 삽입
+            n_blocks = len(blocks)
+            n_images = sum(1 for b in blocks if b.get("type") == "image")
+            img_done = 0
             for i, block in enumerate(blocks):
                 btype = block.get("type", "text")
+                if btype == "image":
+                    img_done += 1
+                # 사진 삽입이 발행 시간의 대부분(1장당 ~20초)이라 사진 카운터를 함께 보여준다
+                _prog(f"본문 삽입 {i+1}/{n_blocks}"
+                      + (f" · 사진 {img_done}/{n_images}" if n_images else ""),
+                      publish_progress(i, n_blocks))
                 if btype == "text":
                     self._paste_text(block["content"])
                 elif btype == "image":
@@ -1330,6 +1362,7 @@ class NaverSeleniumPoster(_SeleniumBase):
                         self._paste_hyperlink(link_text, link_url)
 
             self._screenshot("done")
+            _prog("본문 작성 완료 — 발행 창 여는 중...", 91)
 
             # 발행
             clicked = False
@@ -1350,10 +1383,12 @@ class NaverSeleniumPoster(_SeleniumBase):
             time.sleep(3)
 
             # 공개 설정
+            _prog(f"공개 설정({visibility}) 적용 중...", 93)
             self._set_visibility(visibility)
 
             # 태그
             if tags:
+                _prog("태그 입력 중...", 95)
                 self._input_tags_in_dialog(tags)
 
             # 예약 발행
@@ -1367,6 +1402,7 @@ class NaverSeleniumPoster(_SeleniumBase):
 
             time.sleep(1)
             self._screenshot("publish_settings")
+            _prog("최종 발행 확인 중...", 97)
 
             # 최종 확인 버튼
             confirmed = False
@@ -1646,11 +1682,13 @@ class NaverPoster:
         self._clipboard = ClipboardPoster("naver")
         self._selenium = None  # 지연 초기화
 
-    def post(self, data, method="clipboard", visibility="private", schedule=None):
+    def post(self, data, method="clipboard", visibility="private", schedule=None,
+             progress_cb=None):
         if method == "selenium":
             if not self._selenium:
                 self._selenium = NaverSeleniumPoster()
-            return self._selenium.post(data, visibility=visibility, schedule=schedule)
+            return self._selenium.post(data, visibility=visibility, schedule=schedule,
+                                       progress_cb=progress_cb)
         else:
             return self._clipboard.post(data)
 

@@ -1406,3 +1406,50 @@ def test_custom_style_yields_to_reference_style():
     # 참고 문체 없으면 설정 말투 유지
     p2 = g._build_prompt(photos, "요약", "코스", "기타큐슈", "", "그룹", "제목", style, "", "")
     assert "- 말투: 친근 구어체" in p2
+
+
+# ── 발행 진행표시: 순수 진행률 + 콜백 배선 (2026-08-17) ──
+def test_publish_progress_pure():
+    from posters import publish_progress
+    assert publish_progress(0, 10) == 10            # 시작 = lo
+    assert publish_progress(10, 10) == 90           # 끝 = hi
+    assert publish_progress(5, 10) == 50            # 중간
+    assert publish_progress(0, 0) == 90             # 블록 0개 → hi (0나눗셈 방지)
+    assert publish_progress(-3, 10) == 10           # 범위 클램프
+    assert publish_progress(99, 10) == 90
+    # 단조 증가 — 진행률이 뒤로 가면 UI가 이상해진다
+    seq = [publish_progress(i, 34) for i in range(35)]
+    assert seq == sorted(seq) and seq[0] == 10 and seq[-1] == 90
+
+
+def test_naver_poster_forwards_progress_cb():
+    """NaverPoster 파사드가 progress_cb를 Selenium 발행기로 전달하는가."""
+    from posters import NaverPoster
+    seen = {}
+
+    class _Stub:
+        def post(self, data, visibility=None, schedule=None, progress_cb=None):
+            seen["cb"] = progress_cb
+            progress_cb("본문 삽입 3/10", 30)
+            return {"success": True, "url": "http://x"}
+
+    p = NaverPoster(Config())
+    p._selenium = _Stub()
+    got = []
+    r = p.post({"title": "t"}, method="selenium",
+               progress_cb=lambda m, pct=None: got.append((m, pct)))
+    assert r["success"] and seen["cb"] is not None
+    assert got == [("본문 삽입 3/10", 30)]
+
+
+def test_selenium_post_reports_block_progress(monkeypatch):
+    """블록 삽입 루프가 블록마다 진행 메시지를 내는가 (드라이버 없이 검증)."""
+    poster = NaverSeleniumPoster()
+    msgs = []
+
+    # 드라이버 준비 실패 지점에서 멈추되, 그 전에 준비 메시지는 나와야 한다
+    monkeypatch.setattr(poster, "_ensure_driver", lambda: False)
+    r = poster.post({"title": "t", "blocks": []},
+                    progress_cb=lambda m, pct=None: msgs.append((m, pct)))
+    assert r["success"] is False
+    assert msgs and msgs[0][1] == 2 and "준비" in msgs[0][0]

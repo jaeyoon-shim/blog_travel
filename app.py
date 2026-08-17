@@ -1090,13 +1090,21 @@ def api_publish():
 
     def task():
         state["progress"] = {"status":"publishing","message":"발행 준비 중...","percent":0}
+        def prog(msg, pct=None):
+            # 사진 삽입 루프(1장 ~20초, 34장이면 12분) 동안 상태가 안 바뀌어
+            # "멈춘 것처럼" 보이던 문제 수정 — 블록 단위로 갱신
+            p = state.get("progress") or {}
+            if p.get("status") != "publishing": return   # 이미 끝난 뒤 늦은 콜백 무시
+            p["message"] = msg
+            if pct is not None: p["percent"] = int(pct)
         poster = None
         try:
             content_html = blocks_to_html(blocks)
             post_data = {"title":title,"content":content_html,"tags":tags,
                          "blocks":blocks,"visibility":visibility}
             poster = NaverPoster(state["cfg"])
-            result = poster.post(post_data, method=method, visibility=visibility)
+            result = poster.post(post_data, method=method, visibility=visibility,
+                                 progress_cb=prog)
             if result.get("success"):
                 url = result.get("url","")
                 _gi = data.get("gi")
@@ -1139,11 +1147,19 @@ def api_publish_all():
             for i, gd in enumerate(group_data):
                 state["progress"]["message"] = f"[{i+1}/{total}] 발행 중..."
                 state["progress"]["percent"] = int((i/total)*100)
+                def prog(msg, pct=None, _i=i):
+                    # 글 내부 진행률(0~100)을 전체 구간 [_i, _i+1]/total 에 매핑
+                    p = state.get("progress") or {}
+                    if p.get("status") != "publishing": return
+                    p["message"] = f"[{_i+1}/{total}] {msg}"
+                    if pct is not None:
+                        p["percent"] = int((_i + pct/100.0) / total * 100)
                 content_html = blocks_to_html(gd.get("blocks",[]))
                 post_data = {"title":gd.get("title",""),"content":content_html,
                              "tags":gd.get("tags",[]),"blocks":gd.get("blocks",[]),
                              "visibility":visibility}
-                r = poster.post(post_data, method=method, visibility=visibility)
+                r = poster.post(post_data, method=method, visibility=visibility,
+                                progress_cb=prog)
                 results.append(r); titles.append(gd.get("title","") or f"#{i+1}")
                 time.sleep(5)  # 스팸 방지
             # 실패를 무시하고 "완료"로 보고하던 버그 수정 — 결과 기반 요약
