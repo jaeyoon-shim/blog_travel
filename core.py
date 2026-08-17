@@ -1653,17 +1653,23 @@ class TripPlanner:
         groups = []
         for d in plan.get("days", []):
             photos, memos, directives, meta, names = [], {}, {}, {}, []
-            seen_names = {}
+            seen_names, prev_raw, prev_name = {}, None, None
             for s in d.get("stops", []):
                 raw = s.get("name", "") or "미확인"
-                # 같은 날 같은 이름이 두 번 나오면 = 재방문(세션 클러스터링이 분리한
-                # 별개 방문). 이름이 같으면 하류가 전부 name 키로 묶어(place_groups,
-                # 프롬프트 장소목록, memos/meta dict) 두 방문이 한 섹션으로 재병합되고
-                # 메모·별점은 뒤엣것이 앞엣것을 덮어썼다 → 표시 이름을 구분한다.
-                seen_names[raw] = seen_names.get(raw, 0) + 1
-                n_th = seen_names[raw]
-                name = raw if n_th == 1 else (
-                    f"{raw} (재방문)" if n_th == 2 else f"{raw} (재방문 {n_th - 1})")
+                # 사이에 다른 장소가 낀 동명 stop = 재방문. 이름이 같으면 하류가 전부
+                # name 키로 묶어(place_groups, 프롬프트 장소목록, memos/meta dict)
+                # 두 방문이 한 섹션으로 재병합되고 메모·별점이 서로를 덮어썼다.
+                # ⚠ 연속된 동명 stop은 재방문이 아니다(한 장소가 잘게 쪼개진 것) —
+                #   접미를 붙이면 "(재방문)" 섹션이 헛으로 생긴다. 연속은 같은 이름
+                #   유지 = 하류에서 합쳐져도 시간순이 그대로라 무해.
+                if raw == prev_raw:
+                    name = prev_name
+                else:
+                    seen_names[raw] = seen_names.get(raw, 0) + 1
+                    n_th = seen_names[raw]
+                    name = raw if n_th == 1 else (
+                        f"{raw} (재방문)" if n_th == 2 else f"{raw} (재방문 {n_th - 1})")
+                prev_raw, prev_name = raw, name
                 if name not in names:
                     names.append(name)
                 bits = []
@@ -1837,18 +1843,39 @@ class TripPlanner:
         for i, s in enumerate(old_stops):
             for pid in s.get("photo_ids", []):
                 pid_to_old[pid] = i
+        def _edited(st):
+            """사용자가 손댄 stop인가 — 이 stop의 묶음은 사용자 확정으로 존중한다."""
+            return (st.get("name_source") == "user"
+                    or any(st.get(k) not in (None, "", [], True)
+                           for k in ("events", "feeling", "ai_instruction", "rating")))
+
         for d in new_plan.get("days", []):
+            merged = []          # 사용자 확정 stop으로 되접은 결과
+            last_old_idx = None
             for s in d.get("stops", []):
                 c = Counter(pid_to_old[pid] for pid in s.get("photo_ids", []) if pid in pid_to_old)
-                if not c:
-                    continue
-                old = old_stops[c.most_common(1)[0][0]]
-                if old.get("name_source") == "user" and old.get("name"):
-                    s["name"], s["name_source"] = old["name"], "user"
-                for k in ("events", "feeling", "ai_instruction", "rating", "show_rating", "show_price"):
-                    v = old.get(k)
-                    if v not in (None, "", []):
-                        s[k] = v
+                old_idx = c.most_common(1)[0][0] if c else None
+                old = old_stops[old_idx] if old_idx is not None else None
+                if old is not None:
+                    if old.get("name_source") == "user" and old.get("name"):
+                        s["name"], s["name_source"] = old["name"], "user"
+                    for k in ("events", "feeling", "ai_instruction", "rating",
+                              "show_rating", "show_price"):
+                        v = old.get(k)
+                        if v not in (None, "", []):
+                            s[k] = v
+                # 사용자가 "한 장소"로 확정해둔 구 stop을 재초안이 다시 쪼갠 경우
+                # → 되붙인다(사용자 확정이 진실원). 안 그러면 동명 stop이 생겨
+                #   엉뚱한 "(재방문)" 섹션까지 만들어진다.
+                if (merged and old_idx is not None and old_idx == last_old_idx
+                        and _edited(old)):
+                    merged[-1]["photo_ids"].extend(s.get("photo_ids", []))
+                else:
+                    merged.append(s)
+                last_old_idx = old_idx
+            for i, s in enumerate(merged, 1):
+                s["order"] = i
+            d["stops"] = merged
         return new_plan
 
 

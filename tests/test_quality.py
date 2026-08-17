@@ -1572,3 +1572,49 @@ def test_plan_to_groups_distinguishes_revisit_stops():
     assert g["place_directives"]["연화의탕 (재방문)"] == "밤 지시"
     assert g["place_meta"]["연화의탕"]["rating"] == 4
     assert g["place_meta"]["연화의탕 (재방문)"]["rating"] == 5
+
+
+def test_consecutive_same_name_is_not_revisit():
+    """연속된 동명 stop은 재방문이 아니다 — 헛 '(재방문)' 섹션 방지."""
+    ids = [TripPlanner._photo_id("u/%d.jpg" % i) for i in range(4)]
+    prs = [{"file_path": "u/%d.jpg" % i, "file_name": "%d.jpg" % i} for i in range(4)]
+    plan = {"days": [{"day_no": 1, "date": "2026-06-22", "stops": [
+        {"name": "뷰랜드", "photo_ids": [ids[0]]},
+        {"name": "뷰랜드", "photo_ids": [ids[1]]},      # 연속 → 재방문 아님
+        {"name": "식당",   "photo_ids": [ids[2]]},
+        {"name": "뷰랜드", "photo_ids": [ids[3]]},      # 사이에 다른 장소 → 재방문
+    ]}]}
+    g = TripPlanner.groups_from_plan(plan, prs)[0]
+    assert [p["location_name"] for p in g["photos"]] == [
+        "뷰랜드", "뷰랜드", "식당", "뷰랜드 (재방문)"]
+    assert g["course_line"] == "뷰랜드 → 식당 → 뷰랜드 (재방문)"
+
+
+def test_merge_user_edits_keeps_user_grouping():
+    """사용자가 한 장소로 확정해둔 stop을 재초안이 다시 쪼개면 되붙인다."""
+    ids = [TripPlanner._photo_id("u/%d.jpg" % i) for i in range(3)]
+    old = {"days": [{"day_no": 1, "stops": [
+        {"name": "뷰랜드", "name_source": "user", "photo_ids": ids[:2],
+         "events": ["리프트 탑승"]},
+        {"name": "식당", "name_source": "auto", "photo_ids": [ids[2]]},
+    ]}]}
+    new = {"days": [{"day_no": 1, "stops": [          # 자동이 뷰랜드를 2개로 쪼갬
+        {"name": "주차장", "name_source": "auto", "photo_ids": [ids[0]]},
+        {"name": "전망대", "name_source": "auto", "photo_ids": [ids[1]]},
+        {"name": "식당", "name_source": "auto", "photo_ids": [ids[2]]},
+    ]}]}
+    TripPlanner.merge_user_edits(new, old)
+    stops = new["days"][0]["stops"]
+    assert len(stops) == 2
+    assert stops[0]["name"] == "뷰랜드" and stops[0]["photo_ids"] == ids[:2]
+    assert stops[0]["events"] == ["리프트 탑승"]
+    assert [s["order"] for s in stops] == [1, 2]      # order 재부여
+
+    # 사용자가 손대지 않은 자동 stop이면 새 알고리즘 결과를 유지(되붙이지 않음)
+    old2 = {"days": [{"day_no": 1, "stops": [
+        {"name": "어딘가", "name_source": "auto", "photo_ids": ids[:2]}]}]}
+    new2 = {"days": [{"day_no": 1, "stops": [
+        {"name": "주차장", "name_source": "auto", "photo_ids": [ids[0]]},
+        {"name": "전망대", "name_source": "auto", "photo_ids": [ids[1]]}]}]}
+    TripPlanner.merge_user_edits(new2, old2)
+    assert len(new2["days"][0]["stops"]) == 2
