@@ -403,6 +403,9 @@ def test_generate_drafts_smoke_no_network(monkeypatch):
             message=types.SimpleNamespace(content=content))])
 
     monkeypatch.setattr(g.client.chat.completions, "create", fake_create)
+    # 위키 장소 카드는 실제 HTTP를 타므로 유닛테스트에서는 차단(네트워크 금지 규칙)
+    monkeypatch.setattr(TravelBlogGenerator, "_wiki_card_url",
+                        lambda self, *a, **k: None)
 
     group = {"photos": photos, "label": "전체", "course_line": ""}
     drafts = g.generate_drafts(group, "전체", trip_title="홋카이도 여행",
@@ -411,7 +414,11 @@ def test_generate_drafts_smoke_no_network(monkeypatch):
     post = drafts[0]
     assert post["title"] and post["content"]
     assert "홋카이도 소개" in post["content"]  # 위키 박스가 코드로 최상단 삽입됐는지(핵심 설계 원칙)
-    assert "http://" not in post["content"] and "https://" not in post["content"]  # URL 미누출 불변식
+    # URL 미누출 불변식 — 독자에게 보이는 본문 기준. 발행기용 마커(<!--MAPLINK/MAPCARD-->)는
+    # HTML 주석이라 화면에 안 보이고 발행 시 링크/카드 블록으로 소비된다.
+    import re as _re_
+    visible = _re_.sub(r"<!--.*?-->", "", post["content"], flags=_re_.DOTALL)
+    assert "http://" not in visible and "https://" not in visible
     assert post["style"] == "감성 후기형"
 
 
@@ -1618,3 +1625,172 @@ def test_merge_user_edits_keeps_user_grouping():
         {"name": "전망대", "name_source": "auto", "photo_ids": [ids[1]]}]}]}
     TripPlanner.merge_user_edits(new2, old2)
     assert len(new2["days"][0]["stops"]) == 2
+
+
+# ── 무료 장소 카드: 한국어 위키백과 (2026-08-17) ──
+def _gen_no_net():
+    return TravelBlogGenerator(Config())
+
+
+def test_wiki_norm_pure():
+    f = TravelBlogGenerator._wiki_norm
+    assert f("아마노하시다테 (天橋立)") == f("아마노하시다테")
+    assert f("소라쿠엔 (재방문)") == f("소라쿠엔")
+    assert f("고베 · 메리켄 파크") == f("고베메리켄파크")
+    assert f("") == ""
+
+
+def test_wiki_card_rejects_mismatch_and_disambiguation(monkeypatch):
+    g = _gen_no_net()
+    calls = {"n": 0}
+
+    def fake(payload):
+        def _open(req, timeout=None):
+            calls["n"] += 1
+            import io, json
+            class R:
+                def read(self_): return json.dumps(payload).encode()
+                def __enter__(self_): return self_
+                def __exit__(self_, *a): return False
+            return R()
+        import urllib.request
+        monkeypatch.setattr(urllib.request, "urlopen", _open)
+
+    # ① 문서 없음 → None
+    fake({"query": {"pages": {"-1": {"missing": ""}}}})
+    assert g._wiki_card_url("없는장소이름") is None
+    # ② 동음이의 문서 → None
+    g._wiki_cache = {}
+    fake({"query": {"pages": {"1": {"title": "수성", "pageprops": {"disambiguation": ""}}}}})
+    assert g._wiki_card_url("수성") is None
+    # ③ 제목 불일치(리다이렉트가 엉뚱한 문서로) → None
+    g._wiki_cache = {}
+    fake({"query": {"pages": {"1": {"title": "고베시"}}}})
+    assert g._wiki_card_url("소라쿠엔") is None
+    # ④ 좌표가 사진 GPS와 멀면 → None (동명 다른 장소 차단)
+    g._wiki_cache = {}
+    fake({"query": {"pages": {"1": {"title": "오사카성",
+                                    "coordinates": [{"lat": 34.687, "lon": 135.526}]}}}})
+    assert g._wiki_card_url("오사카성", {"lat": 37.5, "lon": 127.0}) is None
+    # ⑤ 정상 — 제목 일치 + 좌표 근접
+    g._wiki_cache = {}
+    fake({"query": {"pages": {"1": {"title": "오사카성",
+                                    "coordinates": [{"lat": 34.687, "lon": 135.526}]}}}})
+    url = g._wiki_card_url("오사카성", {"lat": 34.686, "lon": 135.530})
+    assert url == "https://ko.wikipedia.org/wiki/%EC%98%A4%EC%82%AC%EC%B9%B4%EC%84%B1"
+    # 캐시 — 두 번째 호출은 네트워크를 타지 않는다
+    before = calls["n"]
+    assert g._wiki_card_url("오사카성", {"lat": 34.686, "lon": 135.530}) == url
+    assert calls["n"] == before
+
+
+def test_wiki_card_marker_label_is_info_not_location():
+    from posters import html_to_blocks
+    html = ('<h2>오사카성</h2><figure><img src="x.jpg" alt="오사카성"/></figure>'
+            '<!--MAPCARD:https://ko.wikipedia.org/wiki/오사카성|오사카성-->')
+    blocks = html_to_blocks(html, [])
+    cards = [b for b in blocks if b["type"] == "map_card"]
+    assert len(cards) == 1 and cards[0]["label"] == "↑↑ 오사카성 정보 ↑↑"
+    # 구글맵 카드는 기존대로 '위치'
+    html2 = html.replace("https://ko.wikipedia.org/wiki/오사카성",
+                         "https://www.google.com/maps/place/?q=place_id:abc")
+    cards2 = [b for b in html_to_blocks(html2, []) if b["type"] == "map_card"]
+    assert cards2[0]["label"] == "↑↑ 오사카성 위치 ↑↑"
+
+
+def test_place_link_url_pure():
+    f = TravelBlogGenerator.place_link_url
+    # 좌표 기반(키 불필요) — 독자에게 정확한 위치 공유가 목적
+    assert f({"lat": 34.6873, "lon": 135.5259}) == \
+        "https://www.google.com/maps/search/?api=1&query=34.687300,135.525900"
+    # 사용자가 검수에서 넣은 링크가 최우선
+    assert f({"lat": 1, "lon": 2}, "https://naver.me/xyz") == "https://naver.me/xyz"
+    # http로 시작 안 하는 입력은 무시(오입력 방지)
+    assert f({"lat": 1.0, "lon": 2.0}, "그냥 메모").startswith("https://www.google.com/maps")
+    assert f(None) == "" and f({}) == ""
+
+
+def test_maplink_marker_becomes_hyperlink_block(monkeypatch):
+    from posters import html_to_blocks
+    g = TravelBlogGenerator(Config())
+    monkeypatch.setattr(TravelBlogGenerator, "_wiki_card_url", lambda self, *a, **k: None)
+    html = g._photo_html("", "소라쿠엔", {"lat": 34.69, "lon": 135.1955},
+                         show_map=True, map_link_url=TravelBlogGenerator.place_link_url(
+                             {"lat": 34.69, "lon": 135.1955}))
+    assert "<!--MAPLINK:" in html
+    # 캡션(독자에게 보이는 텍스트)에는 URL이 없다
+    import re
+    visible = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    assert "http" not in visible and "📍 소라쿠엔" in visible
+
+    blocks = html_to_blocks(html, [])
+    links = [b for b in blocks if b["type"] == "map_link"]
+    assert len(links) == 1
+    assert links[0]["url"].startswith("https://www.google.com/maps/search/?api=1&query=34.69")
+    assert "소라쿠엔 위치 보기" in links[0]["content"]
+
+
+def test_blocks_to_html_keeps_location_link():
+    import app as A
+    html = A.blocks_to_html([
+        {"type": "map_link", "url": "https://maps.example/x", "content": "🗺️ 소라쿠엔 위치 보기"},
+        {"type": "map_card", "url": "https://ko.wikipedia.org/wiki/오사카성",
+         "label": "↑↑ 오사카성 정보 ↑↑", "display": "오사카성"},
+    ])
+    assert 'href="https://maps.example/x"' in html and "소라쿠엔 위치 보기" in html
+    assert 'href="https://ko.wikipedia.org/wiki/오사카성"' in html
+
+
+# ── 설정 스키마 마이그레이션 (2026-08-17) ──
+def test_settings_migration_from_old_schema():
+    import app as A, json
+    old = {
+        "blog_style": {"tone": "친근 구어체", "mood": "감성적", "emoji_level": "많이",
+                       "photo_desc_length": "3~4줄", "place_intro_length": "5줄+",
+                       "include_tips": True, "include_outro": True},
+        "api": {"openai_key": "sk-x", "openai_model": "gpt-4o-mini", "google_key": "AIza",
+                "naver_id": "myid", "naver_pw": "secret", "publish_method": "clipboard",
+                "default_visibility": "비공개"},
+        "ref_urls": ["https://blog.naver.com/a/1"],
+    }
+    m = A.migrate_settings(json.loads(json.dumps(old)))
+    # 길이 2종 → density 1개
+    assert m["blog_style"]["density"] == "자세히"
+    assert "photo_desc_length" not in m["blog_style"]
+    assert "place_intro_length" not in m["blog_style"]
+    # 참고 URL이 있으면 문체 소스 추정
+    assert m["blog_style"]["style_source"] == "reference"
+    # 사장·위험 입력 제거 (평문 비밀번호 포함)
+    for k in ("naver_id", "naver_pw", "publish_method"):
+        assert k not in m["api"]
+    # 살아있는 값은 보존
+    assert m["api"]["openai_key"] == "sk-x" and m["api"]["default_visibility"] == "비공개"
+    # 멱등성 — 두 번 돌려도 같다
+    assert A.migrate_settings(json.loads(json.dumps(m))) == m
+    # ref_urls 없으면 manual로
+    m2 = A.migrate_settings({"blog_style": {}, "api": {}})
+    assert m2["blog_style"]["style_source"] == "manual"
+    assert m2["blog_style"]["density"] == "보통"
+
+
+def test_density_preset_feeds_prompt():
+    import app as A
+    assert set(A.DENSITY_PRESETS) == {"짧게", "보통", "자세히"}
+    for v in A.DENSITY_PRESETS.values():
+        assert v["photo"] and v["place"]
+
+
+def test_save_settings_never_writes_credentials(tmp_path, monkeypatch):
+    import app as A, json
+    f = tmp_path / "settings.json"
+    monkeypatch.setattr(A, "SETTINGS_FILE", f)
+    monkeypatch.setitem(A.state, "settings", {
+        "api": {"openai_key": "sk-1", "google_key": "AIza", "naver_pw": "secret",
+                "naver_id": "id", "publish_method": "clipboard", "default_visibility": "비공개"},
+        "blog_style": {"density": "보통"},
+    })
+    A.save_settings()
+    saved = json.loads(f.read_text(encoding="utf-8"))
+    for k in ("google_key", "naver_id", "naver_pw", "publish_method"):
+        assert k not in saved["api"], k          # 런타임/폐기 키는 파일에 안 남는다
+    assert saved["api"]["openai_key"] == "sk-1"  # 필요한 건 남는다

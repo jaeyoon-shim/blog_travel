@@ -134,6 +134,7 @@ let step=1, photos=[], groups=[], drafts=[], blocks=[], selBlock=-1;
 let curGroup=0, curDraft=0, draftTitle='', draftTags=[];
 let tripTitle='', selMode='by_place', placeMemos={}, routeModes={}, refUrls=[], planData=null, publishedGis=new Set();
 let settings={}, pollTimer=null;
+let advOpen=false;   // 설정 '고급' 섹션 펼침 상태(리렌더 시 유지)
 
 // ── DOM ──
 const $eb=document.getElementById('editorBody'), $et=document.getElementById('editorTitle');
@@ -256,42 +257,51 @@ function renderSettings(){
 
   $eb.innerHTML=`
   <div class="card"><div class="card-label">프로필 이름</div><input type="text" id="s_name" value="${esc(profileName)}" placeholder="예: 내 여행블로그, 감성 스타일..."></div>
-  <div class="settings-section"><h3>✍️ 블로그 스타일</h3>
-    <div class="settings-row"><label>말투</label><div class="s-input"><select id="s_tone" onchange="updateSettingsPreviewLive()"><option ${bs.tone==='친근 구어체'?'selected':''}>친근 구어체</option><option ${bs.tone==='정중 존댓말'?'selected':''}>정중 존댓말</option><option ${bs.tone==='캐주얼 반말'?'selected':''}>캐주얼 반말</option></select></div></div>
-    <div class="settings-row"><label>글 톤</label><div class="s-input"><select id="s_mood" onchange="updateSettingsPreviewLive()"><option ${bs.mood==='감성적'?'selected':''}>감성적</option><option ${bs.mood==='정보 위주'?'selected':''}>정보 위주</option><option ${bs.mood==='유머러스'?'selected':''}>유머러스</option></select></div></div>
-    <div class="settings-row"><label>이모지 사용</label><div class="s-input"><select id="s_emoji" onchange="updateSettingsPreviewLive()"><option ${bs.emoji_level==='많이'?'selected':''}>많이</option><option ${bs.emoji_level==='적당히'?'selected':''}>적당히</option><option ${bs.emoji_level==='안 씀'?'selected':''}>안 씀</option></select></div></div>
-    <div class="settings-row"><label>사진 설명 길이</label><div class="s-input"><select id="s_pdl"><option ${bs.photo_desc_length==='1~2줄'?'selected':''}>1~2줄</option><option ${bs.photo_desc_length==='2~3줄'?'selected':''}>2~3줄</option><option ${bs.photo_desc_length==='3~4줄'?'selected':''}>3~4줄</option></select></div></div>
-    <div class="settings-row"><label>장소 소개 길이</label><div class="s-input"><select id="s_pil"><option ${bs.place_intro_length==='2~3줄'?'selected':''}>2~3줄</option><option ${bs.place_intro_length==='3~4줄'?'selected':''}>3~4줄</option><option ${bs.place_intro_length==='5줄+'?'selected':''}>5줄+</option></select></div></div>
-    <div class="settings-row"><label>꿀팁 포함</label><div class="s-input"><select id="s_tips"><option value="true" ${bs.include_tips!==false?'selected':''}>포함</option><option value="false" ${bs.include_tips===false?'selected':''}>미포함</option></select></div></div>
-    <div class="settings-row"><label>마무리 인사</label><div class="s-input"><select id="s_outro"><option value="true" ${bs.include_outro!==false?'selected':''}>포함</option><option value="false" ${bs.include_outro===false?'selected':''}>미포함</option></select></div></div>
+  <div class="settings-section"><h3>✍️ 문체</h3>
+    <div class="settings-row"><label>문체 소스</label><div class="s-input"><select id="s_src" onchange="toggleStyleSource();updateSettingsPreviewLive()">
+      <option value="manual" ${bs.style_source!=='reference'?'selected':''}>직접 설정</option>
+      <option value="reference" ${bs.style_source==='reference'?'selected':''}>참고 블로그 따라하기</option></select></div></div>
+    <div id="s_manual_rows">
+      <div class="settings-row"><label>말투</label><div class="s-input"><select id="s_tone" onchange="updateSettingsPreviewLive()"><option ${bs.tone==='친근 구어체'?'selected':''}>친근 구어체</option><option ${bs.tone==='정중 존댓말'?'selected':''}>정중 존댓말</option><option ${bs.tone==='캐주얼 반말'?'selected':''}>캐주얼 반말</option></select></div></div>
+      <div class="settings-row"><label>글 톤</label><div class="s-input"><select id="s_mood" onchange="updateSettingsPreviewLive()"><option ${bs.mood==='감성적'?'selected':''}>감성적</option><option ${bs.mood==='정보 위주'?'selected':''}>정보 위주</option><option ${bs.mood==='유머러스'?'selected':''}>유머러스</option></select></div></div>
+    </div>
+    <div id="s_ref_note" class="text-xs text-fg3" style="padding:4px 2px 2px">참고 블로그 URL 등록·분석은 <b>3단계 계획검수</b> 상단에서 합니다. 참고 문체가 있으면 말투·톤 설정보다 우선합니다.</div>
   </div>
-  <div class="settings-section"><h3>🎨 디자인</h3>
-    <div class="settings-row"><label>포인트 색상</label><div class="s-input"><input type="color" id="s_color" value="${ds.accent_color||'#8B9467'}" class="color-input" onchange="updateSettingsPreviewLive()"></div></div>
-    <div class="settings-row"><label>구분선 스타일</label><div class="s-input"><select id="s_sep" onchange="updateSettingsPreviewLive()"><option ${ds.separator_style==='─ ─ ─'?'selected':''}>─ ─ ─</option><option ${ds.separator_style==='━━━'?'selected':''}>━━━</option><option ${ds.separator_style==='· · ·'?'selected':''}>· · ·</option><option ${ds.separator_style==='없음'?'selected':''}>없음</option></select></div></div>
-    <div class="settings-row"><label>장소 라벨</label><div class="s-input"><select id="s_label" onchange="updateSettingsPreviewLive()"><option ${ds.place_label==='PLACE N'?'selected':''}>PLACE N</option><option ${ds.place_label==='장소 N'?'selected':''}>장소 N</option><option ${ds.place_label==='없음'?'selected':''}>없음</option></select></div></div>
-    <div class="settings-row"><label>인트로 스타일</label><div class="s-input"><select id="s_intro" onchange="updateSettingsPreviewLive()"><option ${ds.intro_style==='✈ 여행기 ✈'?'selected':''}>✈ 여행기 ✈</option><option ${ds.intro_style==='심플'?'selected':''}>심플</option><option ${ds.intro_style==='없음'?'selected':''}>없음</option></select></div></div>
+  <div class="settings-section"><h3>📏 분량</h3>
+    <div class="settings-row"><label>글 분량</label><div class="s-input"><select id="s_den" onchange="updateSettingsPreviewLive()">
+      <option ${bs.density==='짧게'?'selected':''}>짧게</option><option ${bs.density==='보통'||!bs.density?'selected':''}>보통</option><option ${bs.density==='자세히'?'selected':''}>자세히</option></select></div></div>
   </div>
-  <div class="settings-section"><h3>🔑 API / 계정</h3>
-    <div class="settings-row"><label>OpenAI Key</label><div class="s-input"><input type="password" id="s_okey" value="${esc(api.openai_key||'')}" placeholder="sk-..."></div></div>
-    <div class="settings-row"><label>모델</label><div class="s-input"><select id="s_model"><option ${api.openai_model==='gpt-4o-mini'?'selected':''}>gpt-4o-mini</option><option ${api.openai_model==='gpt-4o'?'selected':''}>gpt-4o</option><option ${api.openai_model==='gpt-4-turbo'?'selected':''}>gpt-4-turbo</option></select></div></div>
-    <div class="settings-row"><label>Google Maps Key</label><div class="s-input"><input type="password" id="s_gkey" value="${esc(api.google_key||'')}" placeholder="AIza..."></div></div>
-    <div class="settings-row"><label>네이버 ID</label><div class="s-input"><input type="text" id="s_nid" value="${esc(api.naver_id||'')}"></div></div>
-    <div class="settings-row"><label>네이버 PW</label><div class="s-input"><input type="password" id="s_npw" value="${esc(api.naver_pw||'')}"></div></div>
-    <div class="settings-row"><label>발행 방식</label><div class="s-input"><select id="s_method"><option value="selenium" ${api.publish_method==='selenium'?'selected':''}>자동 (Selenium)</option><option value="clipboard" ${api.publish_method==='clipboard'?'selected':''}>수동 (클립보드)</option></select></div></div>
-    <div class="settings-row"><label>기본 공개설정</label><div class="s-input"><select id="s_vis"><option ${api.default_visibility==='비공개'?'selected':''}>비공개</option><option ${api.default_visibility==='공개'?'selected':''}>공개</option></select></div></div>
-  </div>
-  <div class="settings-section"><h3>📝 커스텀 프롬프트</h3>
+  <div class="settings-section"><h3>📝 작성 규칙</h3>
     <div class="mb-6"><div class="text-xs text-fg3 mb-6">추가 지시사항</div><textarea id="s_extra" rows="2" placeholder="예: 항상 ~더라고요 로 끝내줘">${esc(cp.extra_instructions||'')}</textarea></div>
     <div class="mb-6"><div class="text-xs text-fg3 mb-6">금지 표현</div><input type="text" id="s_ban" value="${esc(cp.banned_expressions||'')}" placeholder="예: ~입니다, ~하겠습니다"></div>
     <div class="mb-6"><div class="text-xs text-fg3 mb-6">필수 포함 키워드</div><input type="text" id="s_kw" value="${esc(cp.required_keywords||'')}" placeholder="SEO 키워드 (쉼표 구분)"></div>
   </div>
-  <div class="settings-section"><h3>🔗 참고 블로그 URL</h3>
-    <div id="s_urls"></div>
-    <div class="flex gap-6 mt-6"><input type="text" id="s_url_input" placeholder="https://blog.naver.com/..." style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();sAddUrl()}"><button class="btn btn-ghost btn-sm" onclick="sAddUrl()">+ 추가</button></div>
+  <div class="settings-section"><h3>🔑 필수</h3>
+    <div class="settings-row"><label>OpenAI Key</label><div class="s-input"><input type="password" id="s_okey" value="${esc(api.openai_key||'')}" placeholder="sk-..."></div></div>
+    <div class="settings-row"><label>기본 공개설정</label><div class="s-input"><select id="s_vis"><option ${api.default_visibility==='비공개'?'selected':''}>비공개</option><option ${api.default_visibility==='공개'?'selected':''}>공개</option></select></div></div>
+    <div class="text-xs text-fg3" style="padding:2px">네이버 로그인은 발행 시 브라우저에서 1회 하면 세션이 저장됩니다(비밀번호를 여기 저장하지 않습니다).</div>
   </div>
+  <details class="settings-section" ${advOpen?'open':''} ontoggle="advOpen=this.open"><summary style="cursor:pointer;font-weight:600;padding:4px 0">⚙️ 고급 설정</summary>
+    <div class="settings-row"><label>이모지 사용</label><div class="s-input"><select id="s_emoji" onchange="updateSettingsPreviewLive()"><option ${bs.emoji_level==='많이'?'selected':''}>많이</option><option ${bs.emoji_level==='적당히'?'selected':''}>적당히</option><option ${bs.emoji_level==='안 씀'?'selected':''}>안 씀</option></select></div></div>
+    <div class="settings-row"><label>꿀팁 포함</label><div class="s-input"><select id="s_tips"><option value="true" ${bs.include_tips!==false?'selected':''}>포함</option><option value="false" ${bs.include_tips===false?'selected':''}>미포함</option></select></div></div>
+    <div class="settings-row"><label>마무리 인사</label><div class="s-input"><select id="s_outro"><option value="true" ${bs.include_outro!==false?'selected':''}>포함</option><option value="false" ${bs.include_outro===false?'selected':''}>미포함</option></select></div></div>
+    <div class="settings-row"><label>포인트 색상</label><div class="s-input"><input type="color" id="s_color" value="${ds.accent_color||'#8B9467'}" class="color-input" onchange="updateSettingsPreviewLive()"></div></div>
+    <div class="settings-row"><label>구분선 스타일</label><div class="s-input"><select id="s_sep" onchange="updateSettingsPreviewLive()"><option ${ds.separator_style==='─ ─ ─'?'selected':''}>─ ─ ─</option><option ${ds.separator_style==='━━━'?'selected':''}>━━━</option><option ${ds.separator_style==='· · ·'?'selected':''}>· · ·</option><option ${ds.separator_style==='없음'?'selected':''}>없음</option></select></div></div>
+    <div class="settings-row"><label>장소 라벨</label><div class="s-input"><select id="s_label" onchange="updateSettingsPreviewLive()"><option ${ds.place_label==='PLACE N'?'selected':''}>PLACE N</option><option ${ds.place_label==='장소 N'?'selected':''}>장소 N</option><option ${ds.place_label==='없음'?'selected':''}>없음</option></select></div></div>
+    <div class="settings-row"><label>인트로 스타일</label><div class="s-input"><select id="s_intro" onchange="updateSettingsPreviewLive()"><option ${ds.intro_style==='✈ 여행기 ✈'?'selected':''}>✈ 여행기 ✈</option><option ${ds.intro_style==='심플'?'selected':''}>심플</option><option ${ds.intro_style==='없음'?'selected':''}>없음</option></select></div></div>
+    <div class="settings-row"><label>모델</label><div class="s-input"><select id="s_model"><option ${api.openai_model==='gpt-4o-mini'?'selected':''}>gpt-4o-mini</option><option ${api.openai_model==='gpt-4o'?'selected':''}>gpt-4o</option><option ${api.openai_model==='gpt-4-turbo'?'selected':''}>gpt-4-turbo</option></select></div></div>
+  </details>
   <button class="btn btn-ok w-full mt-12" onclick="saveProfile()">💾 저장 후 시작하기 →</button>
   <button class="btn btn-ghost w-full mt-6" onclick="go(-1)">← 프로필 선택으로</button>`;
-  sRenderUrls();
+  toggleStyleSource();
+}
+
+// 문체 소스에 따라 말투·톤 행을 보이거나 감춘다(참고 블로그가 우선이라 중복 조작 방지)
+function toggleStyleSource(){
+  const src=document.getElementById('s_src')?.value||'manual';
+  const man=document.getElementById('s_manual_rows'), note=document.getElementById('s_ref_note');
+  if(man)man.style.display=(src==='reference')?'none':'';
+  if(note)note.style.display=(src==='reference')?'':'none';
 }
 
 function updateSettingsPreviewLive(){
@@ -345,16 +355,14 @@ function updateSettingsPreview(bs,ds,cp){
     ${cp.extra_instructions?`<div style="margin:12px 0;padding:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:11px;color:#92400e"><strong>추가 지시:</strong> ${esc(cp.extra_instructions)}</div>`:''}
     ${cp.banned_expressions?`<div style="margin:8px 0;padding:10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:11px;color:#991b1b"><strong>금지:</strong> ${esc(cp.banned_expressions)}</div>`:''}
   </div>`;
-  sRenderUrls();
 }
-function sRenderUrls(){const c=document.getElementById('s_urls');if(!c)return;c.innerHTML=refUrls.length?refUrls.map((u,i)=>`<div class="flex items-center gap-6" style="margin-bottom:3px"><span class="text-xs text-fg2" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u)}</span><button class="ba-btn" onclick="refUrls.splice(${i},1);sRenderUrls()">×</button></div>`).join(''):'<div class="text-xs text-fg3">없음</div>'}
-function sAddUrl(){const i=document.getElementById('s_url_input');const u=(i?.value||'').trim();if(!u||!u.startsWith('http'))return;if(!refUrls.includes(u))refUrls.push(u);i.value='';sRenderUrls()}
 async function saveProfile(){
   const name=(document.getElementById('s_name')?.value||'').trim();
   if(!name){alert('프로필 이름을 입력해주세요');return}
-  const d={blog_style:{tone:document.getElementById('s_tone')?.value,mood:document.getElementById('s_mood')?.value,emoji_level:document.getElementById('s_emoji')?.value,photo_desc_length:document.getElementById('s_pdl')?.value,place_intro_length:document.getElementById('s_pil')?.value,include_tips:document.getElementById('s_tips')?.value==='true',include_outro:document.getElementById('s_outro')?.value==='true'},
-    design:{accent_color:document.getElementById('s_color')?.value,separator_style:document.getElementById('s_sep')?.value,place_label:document.getElementById('s_label')?.value,intro_style:document.getElementById('s_intro')?.value},
-    api:{openai_key:document.getElementById('s_okey')?.value,openai_model:document.getElementById('s_model')?.value,google_key:document.getElementById('s_gkey')?.value,naver_id:document.getElementById('s_nid')?.value,naver_pw:document.getElementById('s_npw')?.value,publish_method:document.getElementById('s_method')?.value,default_visibility:document.getElementById('s_vis')?.value},
+  const v=id=>document.getElementById(id)?.value;
+  const d={blog_style:{style_source:v('s_src')||'manual',tone:v('s_tone'),mood:v('s_mood'),emoji_level:v('s_emoji'),density:v('s_den')||'보통',include_tips:v('s_tips')==='true',include_outro:v('s_outro')==='true'},
+    design:{accent_color:v('s_color'),separator_style:v('s_sep'),place_label:v('s_label'),intro_style:v('s_intro')},
+    api:{openai_key:v('s_okey'),openai_model:v('s_model'),default_visibility:v('s_vis')},
     custom_prompt:{extra_instructions:document.getElementById('s_extra')?.value,banned_expressions:document.getElementById('s_ban')?.value,required_keywords:document.getElementById('s_kw')?.value},
     ref_urls:refUrls};
   await fetch(`${API}/api/profiles/save`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_name:name,settings:d})});
@@ -611,6 +619,8 @@ function stopCard(s){const rc=s.receipt||null;
   <textarea class="f-feeling" placeholder="예: 해질녘 가스등이 켜지는데 로맨틱했음" style="${ta};min-height:40px">${esc(s.feeling)}</textarea>
   <div style="${lbl}">✍️ AI에게 줄 지시 (선택)</div>
   <input class="f-ai" value="${esc(s.ai_instruction)}" placeholder="예: 야경 중심, 차분한 톤으로" style="width:100%;font-size:13px;padding:9px 11px;box-sizing:border-box">
+  <div style="${lbl}">🗺️ 위치 링크 (독자에게 공유 · 비우면 사진 좌표 자동)</div>
+  <input class="f-mapurl" value="${esc(s.map_url||'')}" placeholder="네이버지도·구글맵 공유 링크를 붙여넣으면 그걸 씁니다" style="width:100%;font-size:12px;padding:8px 11px;box-sizing:border-box">
   <div class="flex items-center gap-6" style="margin-top:12px"><span class="text-xs text-fg2">⭐ 별점</span><input class="f-rating" type="number" min="0" max="5" step="0.5" value="${s.rating==null?'':s.rating}" style="width:78px;padding:7px 9px"></div>
   ${s.receipt?`<div style="margin-top:10px;font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="color:var(--ok)">🧾 ${esc(s.receipt.store_name||'(가게명?)')} ${s.receipt.amount!=null?esc((s.receipt.currency||'')+s.receipt.amount):''}</span><select onchange="reassignReceipt('${esc(s.stop_id)}',this.value)" style="font-size:12px;max-width:200px">${stopOptions(s.stop_id)}<option value="__none__">— 미배정 —</option></select></div>`:''}
   <div style="margin-top:8px"><select onchange="if(this.value)mergeStop('${esc(s.stop_id)}',this.value)" style="font-size:11px;max-width:230px"><option value="">🔗 다른 장소와 합치기…</option>${stopOptionsExcept(s.stop_id)}</select></div>
@@ -646,7 +656,7 @@ function splitPhoto(pid,fromId){
     s.photo_ids.splice(pi,1);
     const nid='s'+Date.now()+Math.floor(Math.random()*1000);
     const si=d.stops.indexOf(s);
-    d.stops.splice(si+1,0,{stop_id:nid,order:0,name:'',name_source:'none',events:[],feeling:'',ai_instruction:'',rating:null,receipt:null,show_rating:true,show_price:true,photo_ids:[pid]});
+    d.stops.splice(si+1,0,{stop_id:nid,order:0,name:'',name_source:'none',events:[],feeling:'',ai_instruction:'',rating:null,receipt:null,show_rating:true,show_price:true,map_url:'',photo_ids:[pid]});
     break;
   }
   savePlan().then(reloadPlan);
@@ -659,6 +669,7 @@ function collectPlan(){if(!planData)return;
     s.events=el.querySelector('.f-events').value.split('\n').map(x=>x.trim()).filter(Boolean);
     s.feeling=el.querySelector('.f-feeling').value.trim();
     s.ai_instruction=el.querySelector('.f-ai').value.trim();
+    const mu=el.querySelector('.f-mapurl');if(mu)s.map_url=mu.value.trim();
     const rv=el.querySelector('.f-rating').value;s.rating=rv===''?null:parseFloat(rv)})}
 
 async function savePlan(){collectPlan();await fetch(`${API}/api/plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(planData)})}

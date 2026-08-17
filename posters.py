@@ -153,9 +153,24 @@ def html_to_blocks(html_content, photos=None):
         card_url = m.group(1).strip()
         card_display = m.group(2).strip()
         if card_url:
+            # 위키백과 카드는 '위치'가 아니라 장소 정보 카드다(무료 모드 대안)
+            kind = "정보" if "wikipedia.org" in card_url else "위치"
             special_ranges.append((m.start(), m.end(),
                 {"type": "map_card", "url": card_url,
-                 "label": f"↑↑ {card_display} 위치 ↑↑", "display": card_display}))
+                 "label": f"↑↑ {card_display} {kind} ↑↑", "display": card_display}))
+
+    # 2-2) 위치 링크 마커(<!--MAPLINK:url|text-->) → map_link 블록
+    #      하이퍼링크(텍스트+링크)라 OG 카드로 변환되지 않는다 — 레이아웃을
+    #      해치지 않으면서 독자에게 정확한 좌표 위치를 공유하는 게 목적.
+    for m in _re.finditer(r'<!--MAPLINK:(.*?)\|(.*?)-->', html_content, _re.DOTALL):
+        if any(s <= m.start() < e for s, e, _ in special_ranges):
+            continue
+        link_url = m.group(1).strip()
+        link_text = m.group(2).strip()
+        if link_url:
+            special_ranges.append((m.start(), m.end(),
+                {"type": "map_link", "url": link_url,
+                 "content": link_text or "🗺️ 위치 보기"}))
 
     # 3-1) 구분선 패턴 감지 (─ ─ ─ 또는 ━━━ 등)
     for m in _re.finditer(

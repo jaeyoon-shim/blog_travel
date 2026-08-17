@@ -25,13 +25,21 @@ UPLOAD_DIR = Path("uploads"); UPLOAD_DIR.mkdir(exist_ok=True)
 SETTINGS_FILE = Path("settings.json")
 
 # ═══ 기본 설정 ═══
+# 분량 프리셋 — '사진 설명 길이'와 '장소 소개 길이' 두 축을 하나로 합쳤다.
+# (따로 고를 실익이 없고 설정만 늘렸다)
+DENSITY_PRESETS = {
+    "짧게":   {"photo": "1~2줄", "place": "2~3줄"},
+    "보통":   {"photo": "2~3줄", "place": "3~4줄"},
+    "자세히": {"photo": "3~4줄", "place": "5줄+"},
+}
+
 DEFAULT_SETTINGS = {
     "blog_style": {
+        "style_source": "manual",   # manual = 말투·톤 직접, reference = 참고 블로그 문체
         "tone": "친근 구어체",
         "mood": "감성적",
+        "density": "보통",          # 짧게 | 보통 | 자세히
         "emoji_level": "적당히",
-        "photo_desc_length": "2~3줄",
-        "place_intro_length": "3~4줄",
         "include_tips": True,
         "include_outro": True
     },
@@ -45,10 +53,9 @@ DEFAULT_SETTINGS = {
     "api": {
         "openai_key": "",
         "openai_model": "gpt-4o-mini",
+        # google_key는 .env(GOOGLE_MAPS_API_KEY)에서만 주입되는 런타임 값 —
+        # UI 입력·파일 저장 대상이 아니다(없으면 무료 경로로 동작).
         "google_key": "",
-        "naver_id": "",
-        "naver_pw": "",
-        "publish_method": "selenium",
         "default_visibility": "비공개"
     },
     "custom_prompt": {
@@ -95,23 +102,53 @@ def load_settings():
     else:
         state["settings"] = dict(DEFAULT_SETTINGS)
 
-    # .env 환경변수가 있으면 우선
+    migrate_settings(state["settings"])
+
+    # .env 환경변수가 있으면 우선. 네이버 자격증명은 발행기가 환경변수에서만 읽으므로
+    # settings에 싣지 않는다(예전엔 UI 입력을 평문 저장했는데 쓰이지도 않았다).
     api = state["settings"]["api"]
     if os.environ.get("OPENAI_API_KEY"):
         api["openai_key"] = os.environ["OPENAI_API_KEY"]
     if os.environ.get("GOOGLE_MAPS_API_KEY"):
         api["google_key"] = os.environ["GOOGLE_MAPS_API_KEY"]
-    if os.environ.get("NAVER_USERNAME"):
-        api["naver_id"] = os.environ["NAVER_USERNAME"]
-    if os.environ.get("NAVER_PASSWORD"):
-        api["naver_pw"] = os.environ["NAVER_PASSWORD"]
+
+
+# 저장하지 않는 키 — 런타임 주입(google_key)이거나 폐기된 입력이다.
+_UNSAVED_API_KEYS = ("google_key", "naver_id", "naver_pw", "publish_method")
+
+
+def migrate_settings(s):
+    """옛 settings.json → 현재 스키마. 입력 dict를 제자리 갱신하고 반환.
+
+    - 사진설명/장소소개 길이 2종 → density 1개
+    - 네이버 ID/PW·발행방식: 폐기(자격증명은 .env만, 발행은 항상 Selenium)
+    - style_source: 참고 블로그 URL이 등록돼 있으면 reference로 추정
+    """
+    bs = s.setdefault("blog_style", {})
+    if "density" not in bs:
+        pd = bs.get("photo_desc_length", "2~3줄")
+        bs["density"] = {"1~2줄": "짧게", "3~4줄": "자세히"}.get(pd, "보통")
+    bs.pop("photo_desc_length", None)
+    bs.pop("place_intro_length", None)
+    bs.setdefault("style_source", "reference" if s.get("ref_urls") else "manual")
+
+    api = s.setdefault("api", {})
+    dropped = [k for k in ("naver_id", "naver_pw", "publish_method") if k in api]
+    for k in dropped:
+        api.pop(k, None)
+    if dropped:
+        logger.info(f"⚙️ 설정 마이그레이션: 미사용 항목 제거 {dropped}")
+    return s
 
 
 def save_settings():
-    """설정을 settings.json에 저장"""
+    """설정을 settings.json에 저장 (런타임·폐기 키는 파일에 남기지 않는다)"""
     try:
+        to_save = json.loads(json.dumps(state["settings"]))
+        for k in _UNSAVED_API_KEYS:
+            to_save.get("api", {}).pop(k, None)
         with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(state["settings"], f, ensure_ascii=False, indent=2)
+            json.dump(to_save, f, ensure_ascii=False, indent=2)
         logger.info(f"⚙️ 설정 저장: {SETTINGS_FILE}")
     except Exception as e:
         logger.warning(f"설정 저장 실패: {e}")
@@ -180,7 +217,19 @@ def blocks_to_html(blocks):
                          f'border-radius:12px;padding:16px 20px;margin:20px 0;text-align:center">'
                          f'<p style="font-weight:bold;color:#1e40af">{c}</p></div>')
         elif t == "map_link":
-            parts.append(f'<p style="text-align:center;color:#8B9467;font-size:0.85em">{c}</p>')
+            # URL을 버리면 로컬 저장본에서 위치 공유가 사라진다 → 실제 <a>로 렌더
+            u = b.get("url", "")
+            inner = (f'<a href="{u}" target="_blank" rel="noopener" '
+                     f'style="color:#8B9467;text-decoration:underline">{c}</a>') if u else c
+            parts.append(f'<p style="text-align:center;color:#8B9467;font-size:0.85em">{inner}</p>')
+        elif t == "map_card":
+            # 발행 시엔 네이버가 OG 카드로 바꾸지만, 저장본에서는 링크로 남긴다
+            u = b.get("url", "")
+            label = b.get("label", "") or b.get("display", "")
+            if u:
+                parts.append(f'<p style="text-align:center;font-size:0.85em">'
+                             f'<a href="{u}" target="_blank" rel="noopener" '
+                             f'style="color:#8B9467">{label}</a></p>')
     return "\n".join(parts)
 
 
@@ -854,8 +903,9 @@ def _apply_settings_to_generator():
     parts.append(f"- 말투: {bs.get('tone','친근 구어체')}")
     parts.append(f"- 톤: {bs.get('mood','감성적')}")
     parts.append(f"- 이모지: {bs.get('emoji_level','적당히')}")
-    parts.append(f"- 사진 설명: {bs.get('photo_desc_length','2~3줄')}")
-    parts.append(f"- 장소 소개: {bs.get('place_intro_length','3~4줄')}")
+    _den = DENSITY_PRESETS.get(bs.get("density", "보통"), DENSITY_PRESETS["보통"])
+    parts.append(f"- 사진 설명: {_den['photo']}")
+    parts.append(f"- 장소 소개: {_den['place']}")
     if not bs.get("include_tips", True):
         parts.append("- 꿀팁 섹션: 미포함 (TRAVEL TIPS 섹션 생략)")
     if not bs.get("include_outro", True):
@@ -1086,7 +1136,7 @@ def api_publish():
     blocks = data.get("blocks",[])
     tags = data.get("tags",[])
     visibility = data.get("visibility", state["settings"]["api"].get("default_visibility","비공개"))
-    method = data.get("method", state["settings"]["api"].get("publish_method","selenium"))
+    method = data.get("method", "selenium")   # 발행은 항상 Selenium(클립보드 경로 폐기)
 
     def task():
         state["progress"] = {"status":"publishing","message":"발행 준비 중...","percent":0}
@@ -1135,7 +1185,7 @@ def api_publish_all():
     data = request.json or {}
     group_data = data.get("groups",[])  # [{title, blocks, tags}, ...]
     visibility = data.get("visibility", state["settings"]["api"].get("default_visibility","비공개"))
-    method = data.get("method", state["settings"]["api"].get("publish_method","selenium"))
+    method = data.get("method", "selenium")   # 발행은 항상 Selenium(클립보드 경로 폐기)
     total = len(group_data)
     if not total: return jsonify({"error":"데이터 없음"}), 400
     def task():

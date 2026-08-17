@@ -1696,7 +1696,9 @@ class TripPlanner:
                     rc2 = dict(r)
                     if s.get("name"):
                         rc2["location_name"] = name   # 재방문 구분 이름과 동일해야
-                    photos.append(rc2)                # 하류 장소 그룹핑이 맞는다
+                    if s.get("map_url"):              # 하류 장소 그룹핑이 맞는다
+                        rc2["map_url"] = s["map_url"]  # 검수에서 사용자가 지정한 위치 링크
+                    photos.append(rc2)
             if not photos:
                 continue
             groups.append({
@@ -1798,6 +1800,9 @@ class TripPlanner:
                 "events": [], "feeling": "", "ai_instruction": "",
                 "rating": None, "receipt": None,
                 "show_rating": True, "show_price": True,
+                # 위치 링크 — 자동은 사진 좌표로 만들고, 사용자가 검수에서 정확한
+                # 장소 링크로 바꿀 수 있다(빈 값 = 좌표 자동).
+                "map_url": "",
                 "photo_ids": list(pids),
             })
         return stops
@@ -1847,7 +1852,8 @@ class TripPlanner:
             """사용자가 손댄 stop인가 — 이 stop의 묶음은 사용자 확정으로 존중한다."""
             return (st.get("name_source") == "user"
                     or any(st.get(k) not in (None, "", [], True)
-                           for k in ("events", "feeling", "ai_instruction", "rating")))
+                           for k in ("events", "feeling", "ai_instruction", "rating",
+                                     "map_url")))
 
         for d in new_plan.get("days", []):
             merged = []          # 사용자 확정 stop으로 되접은 결과
@@ -1860,7 +1866,7 @@ class TripPlanner:
                     if old.get("name_source") == "user" and old.get("name"):
                         s["name"], s["name_source"] = old["name"], "user"
                     for k in ("events", "feeling", "ai_instruction", "rating",
-                              "show_rating", "show_price"):
+                              "show_rating", "show_price", "map_url"):
                         v = old.get(k)
                         if v not in (None, "", []):
                             s[k] = v
@@ -1970,6 +1976,79 @@ class TravelBlogGenerator:
         self.google_key = config.get("google","maps_api_key") or ""
 
     _CUR_SYM = {"JPY": "¥", "KRW": "₩", "USD": "$"}
+
+    # ── 무료 장소 카드 (한국어 위키백과) ────────────────────────────────
+    # 유료 Places API의 place_id가 없을 때(무료 모드) 쓰는 0원 대안.
+    # 실측: 키 없는 구글맵 URL은 og:title이 없어 "Google 지도" 일반 카드가 되고,
+    #       네이버 지도 URL은 OG가 비어 있다. 한국어 위키백과만 og:title+og:image가
+    #       채워져 리치 카드가 된다.
+    # ⚠ 신뢰 기반 POI 원칙 그대로 — 이름이 정확히 일치하고 GPS 교차검증까지
+    #   통과할 때만 채택하고, 애매하면 None(카드 조용히 생략)이다.
+    _WIKI_API = "https://ko.wikipedia.org/w/api.php"
+    _WIKI_MAX_KM = 30.0          # 문서 좌표와 사진 GPS 허용 거리
+    _REVISIT_SUFFIX = re.compile(r'\s*\(재방문(?:\s*\d+)?\)\s*$')
+
+    @staticmethod
+    def _wiki_norm(s):
+        """비교용 정규화 — 공백·중점·괄호부기 제거. 순수함수."""
+        s = TravelBlogGenerator._REVISIT_SUFFIX.sub("", s or "")
+        s = re.sub(r'\([^)]*\)', '', s)           # 괄호 부기 제거
+        s = re.sub(r'[\s·・,，]', '', s)
+        return s.strip().lower()
+
+    def _wiki_card_url(self, name, gps=None):
+        """장소명 → 한국어 위키백과 문서 URL. 확신 없으면 None.
+
+        채택 조건(전부 충족):
+          ① 문서가 존재(리다이렉트 추적 후)하고 동음이의 문서가 아니다
+          ② 정규화한 문서 제목이 장소명과 일치한다(추측 금지)
+          ③ 문서에 좌표가 있으면 사진 GPS와 30km 이내다(다른 동명 장소 차단)
+        """
+        key = (name or "").strip()
+        if not key:
+            return None
+        cache = getattr(self, "_wiki_cache", None)
+        if cache is None:
+            cache = self._wiki_cache = {}
+        if key in cache:
+            return cache[key]
+
+        cache[key] = None                      # 실패도 캐시(재조회 방지)
+        query = self._REVISIT_SUFFIX.sub("", key).strip()
+        query = re.sub(r'\s*\([^)]*\)\s*$', '', query).strip()   # 끝 괄호 부기 제거
+        if len(query) < 2:
+            return None
+        try:
+            import urllib.request, urllib.parse, json as _json
+            url = (f"{self._WIKI_API}?action=query&format=json&redirects=1"
+                   f"&prop=coordinates|pageprops&ppprop=disambiguation"
+                   f"&titles={urllib.parse.quote(query)}")
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "TravelBlogPro/1.0 (personal blog tool)"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = _json.loads(resp.read().decode("utf-8", "replace"))
+            pages = (data.get("query") or {}).get("pages") or {}
+            for pid, page in pages.items():
+                if str(pid) == "-1" or "missing" in page:
+                    return None
+                if (page.get("pageprops") or {}).get("disambiguation") is not None:
+                    return None                # 동음이의 → 카드 부적합
+                title = page.get("title", "")
+                if self._wiki_norm(title) != self._wiki_norm(query):
+                    return None                # 제목 불일치 → 추측 금지
+                coords = page.get("coordinates") or []
+                if coords and gps and gps.get("lat") is not None:
+                    dist = TripStructurer._haversine(
+                        gps["lat"], gps["lon"], coords[0]["lat"], coords[0]["lon"])
+                    if dist / 1000.0 > self._WIKI_MAX_KM:
+                        return None            # 동명이지만 다른 곳
+                cache[key] = ("https://ko.wikipedia.org/wiki/"
+                              + urllib.parse.quote(title.replace(" ", "_")))
+                logger.info(f"  📖 위키 장소 카드: {title}")
+                return cache[key]
+        except Exception as e:
+            logger.debug(f"  위키 카드 조회 실패(무시): {name}: {e}")
+        return None
 
     def _format_meta_line(self, rating, amount, currency, show_rating, show_price):
         """별점·가격을 텍스트 한 줄 HTML로. URL 없음. 표시할 게 없으면 ''."""
@@ -2937,11 +3016,23 @@ class TravelBlogGenerator:
         #  ② 태그 없는/강등된 유닛은 같은 장소의 "다음 앵커" 앞에 병합 삽입해
         #     시간순을 보존하고, 앵커 뒤 꼬리 유닛만 2단계(섹션 끝)로 넘긴다.
         def _unit_html(u):
-            map_card_url = (f"https://www.google.com/maps/place/?q=place_id:{u['place_id']}"
-                             if u.get("place_id") else None)
+            # 유료 Places place_id가 있으면 구글맵 위치 카드,
+            # 없으면(무료 모드) 한국어 위키백과 카드 — 둘 다 없으면 카드 생략(📍 텍스트만).
+            if u.get("place_id"):
+                map_card_url = (
+                    f"https://www.google.com/maps/place/?q=place_id:{u['place_id']}")
+            elif u.get("show_map"):
+                map_card_url = self._wiki_card_url(
+                    u["photos"][0].get("location_name", ""), u.get("gps"))
+            else:
+                map_card_url = None
+            # 위치 링크: 검수에서 사용자가 넣은 map_url 우선, 없으면 사진 좌표
+            map_link_url = self.place_link_url(
+                u.get("gps"), u["photos"][0].get("map_url", "")) if u["show_map"] else ""
             return self._photo_html(
                 u["fp"], u["display"], u["gps"], show_map=u["show_map"],
-                map_card_url=map_card_url, src_files=u["file_names"])
+                map_card_url=map_card_url, src_files=u["file_names"],
+                map_link_url=map_link_url)
 
         units_by_place = OrderedDict()
         for u in units:
@@ -3503,8 +3594,22 @@ class TravelBlogGenerator:
             return f"{loc_kr} ({loc_local})"
         return loc_kr or loc_local or "여행지"
 
+    @staticmethod
+    def place_link_url(gps, user_url=""):
+        """장소 위치 링크 URL — 사용자가 검수에서 넣은 값이 최우선, 없으면 좌표 기반.
+
+        좌표 링크는 **API 키가 필요 없다**(Maps URLs 스킴). 목적은 카드 장식이 아니라
+        독자에게 **정확한 위치를 공유**하는 것이라 좌표가 가장 정확하다. 순수함수."""
+        u = (user_url or "").strip()
+        if u.startswith("http"):
+            return u
+        if gps and gps.get("lat") is not None and gps.get("lon") is not None:
+            return ("https://www.google.com/maps/search/?api=1&query="
+                    f"{gps['lat']:.6f},{gps['lon']:.6f}")
+        return ""
+
     def _photo_html(self, fp, display, gps, show_map=True, map_card_url=None,
-                    src_files=None):
+                    src_files=None, map_link_url=None):
         """단일 사진(또는 콜라주) HTML 생성 — EXIF 방향 보정 + base64 인코딩.
         src_files: 이 figure를 구성하는 원본 파일명 목록(순서 유지). 발행기
         (html_to_blocks)가 이 목록으로 figure를 제자리에서 개별 사진으로 전개해
@@ -3557,9 +3662,15 @@ class TravelBlogGenerator:
             # 발행용 지도 카드 마커(주석) — 미리보기에는 안 보이고, 발행기가
             # html_to_blocks에서 map_card 블록으로 변환해 OG 카드 변환을 유도한다.
             # 본문 텍스트에는 여전히 URL을 노출하지 않는다(불변식 유지).
+            safe_display = display.replace("|", "").replace("-->", "")
             if show_map and gps and map_card_url:
-                safe_display = display.replace("|", "").replace("-->", "")
                 img_html += f'<!--MAPCARD:{map_card_url}|{safe_display}-->\n'
+            # 위치 링크 마커 — 발행기가 하이퍼링크(텍스트+링크)로 넣는다.
+            # OG 카드가 아니라 링크라 레이아웃을 해치지 않으면서 좌표 그대로
+            # 정확한 위치를 공유한다(키 불필요).
+            if show_map and map_link_url:
+                img_html += (f'<!--MAPLINK:{map_link_url}|'
+                             f'🗺️ {safe_display} 위치 보기-->\n')
 
         return img_html
 
