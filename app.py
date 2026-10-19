@@ -13,7 +13,8 @@ from flask import Flask, request, jsonify, send_from_directory
 
 from core import (Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator,
                   LocalSaver, NaverBlogAnalyzer, StyleAnalyzer, logger,
-                  TRIP_BRIEF_KEYS, normalize_brief, merge_brief)
+                  TRIP_BRIEF_KEYS, normalize_brief, merge_brief,
+                  normalize_outline, group_place_names)
 from posters import NaverPoster, TistoryPoster, html_to_blocks, summarize_publish_results
 
 app = Flask(__name__, static_folder='static')
@@ -408,7 +409,7 @@ def api_status():
         "group_count": len(_active_groups()),
         "has_plan": bool((state.get("plan") or {}).get("days")),
         "has_drafts": any(gs.get("drafts") for gs in state.get("group_states", {}).values()),
-        "has_saved_drafts": os.path.isdir(os.path.join(_plan_dir(), "drafts")) if state.get("plan") else False,
+        "has_saved_drafts": _has_saved_draft_files() if state.get("plan") else False,
         "progress": state["progress"],
         "published_gis": sorted(state.get("published_gis") or []),
         "project": os.path.basename(state.get("_plan_dir") or ""),
@@ -644,6 +645,73 @@ def _load_saved_drafts(gi):
     except Exception as e:
         logger.warning(f"초안 로드 실패(무시): {e}")
     return None
+
+
+def _has_saved_draft_files():
+    """drafts/에 초안 파일(group_*.json)이 있나. 목차(outline_*.json)만 있으면 False —
+    폴더 존재로 판정하면 목차만 만든 일차가 "초안 있음"으로 보여 편집 화면이 빈 채로 열린다."""
+    d = os.path.join(_plan_dir(), "drafts")
+    try:
+        return any(n.startswith("group_") and n.endswith(".json") for n in os.listdir(d))
+    except OSError:
+        return False
+
+
+# ── 목차(outline) 저장소: plans/<title>/drafts/outline_<gi>.json ──
+# drafts/ 안이라 /api/plan/draft(새 계획 = 새 원고 세션)가 함께 지운다 — 의도된 동작.
+def _outline_path(gi):
+    return os.path.join(_plan_dir(), "drafts", f"outline_{gi}.json")
+
+
+def _load_outline(gi):
+    try:
+        p = _outline_path(gi)
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"목차 로드 실패(무시): {e}")
+    return None
+
+
+def _save_outline(gi, outline):
+    """성공 True / 실패 False — 호출부는 실패를 성공으로 보고하지 않는다."""
+    try:
+        p = _outline_path(gi)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(outline, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        logger.warning(f"목차 저장 실패: {e}")
+        return False
+
+
+def _drafts_for(gi):
+    """메모리 초안, 없으면 저장 파일에서 복원(재시작 대비). 없으면 []."""
+    gs = state["group_states"].get(gi, {})
+    if not gs.get("drafts"):
+        saved = _load_saved_drafts(gi)
+        if saved:
+            state["group_states"].setdefault(gi, {})["drafts"] = saved
+    return state["group_states"].get(gi, {}).get("drafts") or []
+
+
+_BUSY_STATUSES = ("generating", "publishing", "revising", "analyzing")
+
+
+def _busy():
+    """오래 걸리는 작업 진행 중인가 — 신규 라우트는 이때 409(같은 progress 슬롯 공유)."""
+    return (state.get("progress") or {}).get("status") in _BUSY_STATUSES
+
+
+def _brief_for_group(g):
+    """그룹(일차)의 병합 브리프 — 일차는 그룹의 day_index로 명시 조회(빈 일차 무관)."""
+    plan = state.get("plan") or {}
+    days = plan.get("days") or []
+    di = g.get("day_index")
+    day = days[di] if isinstance(di, int) and 0 <= di < len(days) else {}
+    return merge_brief(plan.get("brief"), day.get("brief"))
 
 
 _SESSION_KEYS = ["photo_paths", "photo_results", "naver_analysis",
@@ -1041,6 +1109,12 @@ def api_generate():
     groups = _active_groups()
     if gi >= len(groups):
         return jsonify({"error":"잘못된 그룹"}), 400
+    outline = None
+    if data.get("use_outline"):
+        outline = _load_outline(gi)
+        if not outline or not outline.get("approved"):
+            return jsonify({"error": "승인된 목차가 없습니다 — 목차를 먼저 확정하세요"}), 400
+    brief = _brief_for_group(groups[gi])
     def task():
         state["progress"] = {"status":"generating","message":"AI 초안 생성 중...","percent":0}
         try:
@@ -1061,7 +1135,8 @@ def api_generate():
                 tmp, g["label"], title,
                 state["naver_analysis"], state["style_analysis"],
                 selected_structure=structure, route_modes=route_modes,
-                progress_cb=lambda m: state["progress"].update({"message":m}))
+                progress_cb=lambda m: state["progress"].update({"message":m}),
+                brief=brief, outline=outline)
             if not dr:
                 # 0개 = 실패다. "완료"로 보고하면 편집 단계에서 "못 불러온다"로 터진다
                 state["progress"] = {"status":"error",
@@ -1110,12 +1185,15 @@ def api_generate_all():
                     "message":f"[{gi+1}/{total}] {g.get('label','')} 생성 중...",
                     "percent":int((gi/total)*100)}
                 tmp = dict(g); tmp["place_memos"] = {**g.get("place_memos", {}), **(data.get("place_memos") or {})}
+                _ol = _load_outline(gi)
                 dr = state["generator"].generate_drafts(
                     tmp, g["label"], title,
                     state["naver_analysis"], state["style_analysis"],
                     selected_structure=structure, route_modes=route_modes,
                     progress_cb=lambda m,_gi=gi: state["progress"].update(
-                        {"message":f"[{_gi+1}/{total}] {m}"}))
+                        {"message":f"[{_gi+1}/{total}] {m}"}),
+                    brief=_brief_for_group(g),
+                    outline=_ol if (_ol or {}).get("approved") else None)
                 if dr:
                     state["group_states"].setdefault(gi,{})["drafts"] = dr
                     _save_drafts(gi)
@@ -1136,6 +1214,69 @@ def api_generate_all():
             state["progress"] = {"status":"error","message":f"❌ {e}","percent":0}
     threading.Thread(target=task, daemon=True).start()
     return jsonify({"started":True,"total":total})
+
+
+# ── 목차 (본문 쓰기 전 사람이 승인하는 설계) ──
+@app.route('/api/outline/<int:gi>', methods=['GET'])
+def api_outline_get(gi):
+    groups = _active_groups()
+    if gi >= len(groups):
+        return jsonify({"error": "잘못된 그룹"}), 400
+    g = groups[gi]
+    return jsonify({"outline": _load_outline(gi), "places": group_place_names(g),
+                    "label": g.get("label", "")})
+
+
+@app.route('/api/outline/<int:gi>', methods=['PUT'])
+def api_outline_put(gi):
+    """목차 편집 저장(디바운스 자동저장). 섹션은 그룹 장소 순서·이름으로 재정규화 —
+    순서 변경은 계획 검수에서만. 진행 중에도 막지 않는다(자동저장 유실 방지)."""
+    groups = _active_groups()
+    if gi >= len(groups):
+        return jsonify({"error": "잘못된 그룹"}), 400
+    data = request.json or {}
+    prev = _load_outline(gi) or {}
+    if "brief_used" not in data and prev.get("brief_used"):
+        data["brief_used"] = prev["brief_used"]
+    if "title_candidates" not in data and prev.get("title_candidates"):
+        data["title_candidates"] = prev["title_candidates"]
+    ol = normalize_outline(data, group_place_names(groups[gi]),
+                           keyword=(state.get("plan") or {}).get("region", ""))
+    if not _save_outline(gi, ol):
+        return jsonify({"error": "목차 저장 실패"}), 500
+    return jsonify(ol)
+
+
+@app.route('/api/outline/<int:gi>', methods=['POST'])
+def api_outline_generate(gi):
+    if _busy():
+        return jsonify({"error": "다른 작업이 진행 중입니다 — 끝난 뒤 다시 시도하세요"}), 409
+    groups = _active_groups()
+    if gi >= len(groups):
+        return jsonify({"error": "잘못된 그룹"}), 400
+    g = groups[gi]
+    brief = _brief_for_group(g)
+    region = (state.get("plan") or {}).get("region", "")
+    def task():
+        state["progress"] = {"status": "generating", "message": "목차 만드는 중...", "percent": 0}
+        try:
+            ol = state["generator"].generate_outline(g, brief, state.get("naver_analysis"), region)
+            if not ol:
+                state["progress"] = {"status": "error", "percent": 0,
+                    "message": "❌ 목차 생성 실패 — 다시 시도하거나 '목차 없이 바로 쓰기'를 쓰세요"}
+                return
+            prev = _load_outline(gi) or {}
+            if (prev.get("title") or "").strip():
+                ol["title"] = prev["title"]          # 사용자가 확정한 제목은 재생성이 덮지 않는다
+            if not _save_outline(gi, ol):
+                state["progress"] = {"status": "error", "percent": 0,
+                                     "message": "❌ 목차 저장 실패 — 다시 시도해주세요"}
+                return
+            state["progress"] = {"status": "done", "message": "✅ 목차 완료", "percent": 100}
+        except Exception as e:
+            state["progress"] = {"status": "error", "message": f"❌ 목차 생성 실패: {e}", "percent": 0}
+    threading.Thread(target=task, daemon=True).start()
+    return jsonify({"started": True})
 
 
 # ── 피드백 재작성 (가안 → 최종본) ──

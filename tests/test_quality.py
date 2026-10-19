@@ -2217,3 +2217,121 @@ def test_generate_outline_normalizes_and_rejects_length(monkeypatch):
     monkeypatch.setattr(g.client.chat.completions, "create", boom)
     assert g.generate_outline(group, None, None, "벳푸") is None
     assert g.generate_outline({"photos": []}) is None
+
+
+class _FakeGen:
+    """라우트 테스트용 생성기 스텁 — 네트워크 없음, 받은 인자 기록."""
+    def __init__(self, outline_result="default"):
+        self.calls = []
+        self.outline_result = outline_result
+    def generate_outline(self, group, brief=None, naver_analysis=None, region=""):
+        from core import normalize_outline
+        self.calls.append(("outline", brief, region))
+        if self.outline_result != "default":
+            return self.outline_result
+        names = [p["location_name"] for p in group["photos"]]
+        return normalize_outline({"title_candidates": ["오타루 운하 산책 1일차"],
+                                  "sections": [{"place": n, "gist": "AI 요지"} for n in names]},
+                                 list(dict.fromkeys(names)), keyword=region)
+    def generate_drafts(self, group, label, title="", na=None, sa=None, **kw):
+        self.calls.append(("drafts", kw.get("brief"), kw.get("outline")))
+        return [{"title": (kw.get("outline") or {}).get("title") or "제목",
+                 "content": '<h2 data-place="오타루 운하">오타루 운하</h2><p>본문</p>',
+                 "tags": [], "photo_results": group["photos"]}]
+
+
+def _outline_env(monkeypatch, tmp_path, gen=None):
+    """plan 2일차(브리프 포함) + tmp 저장소 + 스레드 동기화. 사용자 plans/ 무기록."""
+    import app as app_mod
+    photos = [_pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True, 43.19, 140.99),
+              _pr("u/c.jpg", "2026:06:23 09:00:00", "삿포로 TV타워", True, 43.06, 141.35)]
+    plan = TripPlanner.build_draft(photos)
+    plan["region"] = "홋카이도"
+    plan["brief"] = {"concept": "겨울 혼행", "message": "공통 메시지"}
+    plan["days"][1]["brief"] = {"message": "2일차 메시지"}
+    monkeypatch.setattr(app_mod, "_plan_dir", lambda: str(tmp_path))
+    monkeypatch.setitem(app_mod.state, "_plan_dir", str(tmp_path))
+    monkeypatch.setitem(app_mod.state, "plan", plan)
+    monkeypatch.setitem(app_mod.state, "photo_results", photos)
+    monkeypatch.setitem(app_mod.state, "group_states", {})
+    monkeypatch.setitem(app_mod.state, "naver_analysis", {"keyword": "홋카이도 여행"})
+    monkeypatch.setitem(app_mod.state, "style_analysis", None)
+    monkeypatch.setitem(app_mod.state, "completed", set())
+    monkeypatch.setitem(app_mod.state, "progress", {"status": "idle", "message": "", "percent": 0})
+    monkeypatch.setitem(app_mod.state, "generator", gen or _FakeGen())
+    monkeypatch.setattr(app_mod, "_apply_settings_to_generator", lambda: None)
+    _sync_threads(monkeypatch, app_mod)
+    return app_mod
+
+
+def test_outline_routes_generate_put_get_restart(monkeypatch, tmp_path):
+    app_mod = _outline_env(monkeypatch, tmp_path)
+    c = app_mod.app.test_client()
+    r = c.get('/api/outline/1')
+    assert r.status_code == 200 and r.get_json()["outline"] is None
+    assert r.get_json()["places"] == ["삿포로 TV타워"]
+    assert c.post('/api/outline/1').status_code == 200
+    assert app_mod.state["progress"]["status"] == "done"
+    kind, brief, region = app_mod.state["generator"].calls[-1]
+    assert kind == "outline" and region == "홋카이도"
+    assert brief["concept"] == "겨울 혼행" and brief["message"] == "2일차 메시지"   # 일차 보충 우선
+    ol = c.get('/api/outline/1').get_json()["outline"]
+    assert ol["sections"][0]["place"] == "삿포로 TV타워"
+    # 편집: 순서·장소를 바꾸려 해도 그룹 장소로 재정규화, 제목 확정
+    ol["sections"] = [{"place": "가짜장소", "gist": "x"},
+                      {"place": "삿포로 TV타워", "gist": "야경 {중심}", "length": "길게"}]
+    ol["title"] = "내 제목"
+    r = c.put('/api/outline/1', json=ol)
+    assert r.status_code == 200
+    put = r.get_json()
+    assert [s["place"] for s in put["sections"]] == ["삿포로 TV타워"]
+    assert put["sections"][0]["gist"] == "야경 {중심}" and put["title"] == "내 제목"
+    assert (tmp_path / "drafts" / "outline_1.json").exists()
+    # 재시작 시뮬레이션: 메모리 비워도 파일에서 그대로
+    app_mod.state["group_states"] = {}
+    again = c.get('/api/outline/1').get_json()["outline"]
+    assert again["title"] == "내 제목" and again["sections"][0]["length"] == "길게"
+    # 목차 재생성은 확정 제목을 덮지 않는다
+    c.post('/api/outline/1')
+    assert c.get('/api/outline/1').get_json()["outline"]["title"] == "내 제목"
+    # 목차만 있는 drafts 폴더 ≠ 초안 있음
+    assert c.get('/api/status').get_json()["has_saved_drafts"] is False
+
+
+def test_outline_generate_failure_and_busy_409(monkeypatch, tmp_path):
+    app_mod = _outline_env(monkeypatch, tmp_path, gen=_FakeGen(outline_result=None))
+    c = app_mod.app.test_client()
+    c.post('/api/outline/0')
+    p = app_mod.state["progress"]
+    assert p["status"] == "error" and "목차 없이 바로 쓰기" in p["message"]   # 실패를 성공으로 승격 금지
+    assert not (tmp_path / "drafts" / "outline_0.json").exists()
+    for st in ("generating", "publishing", "revising", "analyzing"):
+        app_mod.state["progress"] = {"status": st, "message": "", "percent": 0}
+        assert c.post('/api/outline/0').status_code == 409
+    assert c.get('/api/outline/9').status_code == 400
+
+
+def test_generate_use_outline_passes_outline_and_brief(monkeypatch, tmp_path):
+    app_mod = _outline_env(monkeypatch, tmp_path)
+    c = app_mod.app.test_client()
+    # 승인 목차 없이 use_outline → 400
+    assert c.post('/api/generate', json={"group_index": 0, "use_outline": True}).status_code == 400
+    c.post('/api/outline/0')
+    ol = c.get('/api/outline/0').get_json()["outline"]
+    ol.update({"approved": True, "title": "확정 제목"})
+    c.put('/api/outline/0', json=ol)
+    r = c.post('/api/generate', json={"group_index": 0, "use_outline": True})
+    assert r.status_code == 200 and app_mod.state["progress"]["status"] == "done"
+    kind, brief, outline = app_mod.state["generator"].calls[-1]
+    assert kind == "drafts" and outline["approved"] and outline["title"] == "확정 제목"
+    assert brief["message"] == "공통 메시지"                 # 1일차는 보충 없음 → 공통 상속
+    assert app_mod.state["group_states"][0]["drafts"][0]["title"] == "확정 제목"
+    # use_outline 없으면 목차 미전달(탈출구), 브리프는 전달
+    c.post('/api/generate', json={"group_index": 0})
+    kind, brief, outline = app_mod.state["generator"].calls[-1]
+    assert outline is None and brief["concept"] == "겨울 혼행"
+    assert c.get('/api/status').get_json()["has_saved_drafts"] is True
+    # 전체 생성은 승인 목차가 있는 일차에 목차를 쓴다(확정 제목 보존)
+    c.post('/api/generate_all', json={})
+    outs = [x[2] for x in app_mod.state["generator"].calls[-2:]]
+    assert outs[0]["title"] == "확정 제목" and outs[1] is None
