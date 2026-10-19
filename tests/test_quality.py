@@ -2621,3 +2621,26 @@ def test_revise_draft_canonicalizes_headers(monkeypatch):
     out = g.revise_draft(post, "다듬기", None)
     assert [p for p, _ in _h2_pairs(out["content"])] == [_EXPO, "KYK돈카스"]
     assert "고친소개" in out["content"]
+
+
+# ── 2026-10-19 E2E 발견: 목차 요지가 본문에 안 실림 → 최우선 장소 지시 채널로 ──
+def test_outline_directives_merge_into_place_directives():
+    from core import outline_directives, merge_place_directives
+    ol = {"approved": True, "sections": [
+        {"place": "A", "gist": "손수건 이야기", "emphasis": "비 오는 날", "length": "보통"},
+        {"place": "B", "gist": "", "emphasis": "", "length": "길게"}]}
+    d = outline_directives(ol)
+    assert "손수건 이야기" in d["A"] and "비 오는 날" in d["A"]
+    assert "B" not in d                                      # 요지·강조 없으면 지시 없음
+    merged = merge_place_directives({"A": "가격 언급 금지", "C": "짧게"}, d)
+    assert merged["A"].startswith("가격 언급 금지") and "손수건 이야기" in merged["A"]
+    assert merged["C"] == "짧게"
+    assert outline_directives({"approved": False, "sections": ol["sections"]}) == {}
+    assert outline_directives(None) == {}
+
+
+def test_generate_drafts_routes_outline_gist_to_directives():
+    """승인 목차의 섹션 요지가 [장소별 필수 지시] 채널로 프롬프트에 들어간다(배선 확인)."""
+    import core, inspect
+    src = inspect.getsource(core.TravelBlogGenerator.generate_drafts)
+    assert "merge_place_directives" in src and "outline_directives" in src

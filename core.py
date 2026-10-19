@@ -2105,6 +2105,32 @@ def outline_prompt_block(outline):
     return "\n".join(lines) + "\n"
 
 
+def outline_directives(outline):
+    """승인 목차의 섹션 요지·강조 → {장소명: 지시문}. 미승인·없음이면 {}.
+    목차 블록은 긴 프롬프트 끝의 '참고'로 읽혀 요지가 자주 무시됐다(E2E 3회 중 2회).
+    모델이 잘 따르는 [장소별 필수 지시] 채널로 같은 내용을 보낸다."""
+    if not isinstance(outline, dict) or not outline.get("approved"):
+        return {}
+    out = {}
+    for s in outline.get("sections") or []:
+        bits = []
+        if (s.get("gist") or "").strip():
+            bits.append(f"이 섹션의 요지(글쓴이 확정) — {s['gist'].strip()}")
+        if (s.get("emphasis") or "").strip():
+            bits.append(f"강조할 점 — {s['emphasis'].strip()}")
+        if bits and s.get("place"):
+            out[s["place"]] = " / ".join(bits)
+    return out
+
+
+def merge_place_directives(base, extra):
+    """기존 장소별 지시(계획 검수 ai_instruction)에 목차 지시를 덧붙인 새 dict."""
+    merged = {k: v for k, v in (base or {}).items()}
+    for k, v in (extra or {}).items():
+        merged[k] = f"{merged[k]} / {v}" if str(merged.get(k) or "").strip() else v
+    return merged
+
+
 def outline_section_hint(outline, key):
     """섹션 재작성용 — 해당 섹션의 승인 목차 요지만 조각으로. 없으면 ""."""
     if not isinstance(outline, dict):
@@ -2522,6 +2548,9 @@ class TravelBlogGenerator:
         approved = bool((outline or {}).get("approved"))
         outline_block = outline_prompt_block(outline) if approved else ""
         confirmed_title = ((outline or {}).get("title") or "").strip() if approved else ""
+        if approved:
+            place_directives = merge_place_directives(place_directives, outline_directives(outline))
+        self._current_outline_approved = approved
 
         drafts = []
         for si, s in enumerate(styles):
@@ -3175,6 +3204,9 @@ class TravelBlogGenerator:
                             " 존댓말 어미(~요, ~니다, ~했어요, ~답니다, ~네요)는 단 한 문장도 금지.")
             elif register == "polite":
                 sys_msg += " 글 전체를 해요체로 일관되게 작성하세요(어미 혼용 금지)."
+            if getattr(self, "_current_outline_approved", False):
+                sys_msg += (" 글쓴이가 승인한 목차가 있습니다 — 각 장소 섹션의 요지·강조점은"
+                            " 해당 섹션 본문에 빠짐없이 문장으로 반영하세요.")
             try:
                 r = self.client.chat.completions.create(
                     model=self.model,
