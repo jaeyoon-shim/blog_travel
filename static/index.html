@@ -49,6 +49,7 @@ textarea{resize:vertical;min-height:50px;line-height:1.5}
 .btn-pri{background:var(--pri);color:#fff}.btn-pri:hover{background:var(--pri2)}
 .btn-ghost{background:transparent;border:1px solid var(--bd);color:var(--fg2)}.btn-ghost:hover{border-color:var(--fg3);color:var(--fg)}
 .btn-sm{padding:4px 8px;font-size:10px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
 .btn-ok{background:var(--ok);color:#fff}
 .btn-warn{background:var(--warn);color:#000}
 .btn-err{background:var(--err);color:#fff}
@@ -854,7 +855,7 @@ function renderOutlineEditor(){
       +`<input type="text" id="olTitle" class="ol-in" value="${esc(o.title||'')}" placeholder="직접 입력하거나 위 후보를 고르세요 (비우면 AI가 제목을 정함)" style="width:100%;box-sizing:border-box;margin-top:6px"></div>`;
     h+=`<div class="card"><div class="card-label">인트로 방향</div><textarea id="olIntro" class="ol-in" style="width:100%;min-height:48px;box-sizing:border-box">${esc(o.intro_hook||'')}</textarea></div>`;
     h+=`<div class="card"><div class="card-label">장소 섹션 <span class="text-xs text-fg3">(방문 순서 고정 — 순서 변경은 계획 검수에서)</span></div>`
-      +(o.sections||[]).map((s,i)=>`<div class="ol-sec" data-i="${i}" style="padding:8px 0;border-top:1px solid var(--bd)"><div style="font-weight:600;font-size:13px">${i+1}. ${esc(s.place)}</div><input class="ol-gist ol-in" value="${esc(s.gist||'')}" placeholder="요지 — 이 섹션에서 말할 것" style="width:100%;box-sizing:border-box;margin-top:4px"><input class="ol-emph ol-in" value="${esc(s.emphasis||'')}" placeholder="강조점" style="width:100%;box-sizing:border-box;margin-top:4px"><select class="ol-len ol-in" style="margin-top:4px;max-width:120px">${['짧게','보통','길게'].map(v=>`<option ${s.length===v?'selected':''}>${v}</option>`).join('')}</select></div>`).join('')
+      +(o.sections||[]).map((s,i)=>`<div class="ol-sec" data-i="${i}" style="padding:8px 0;border-top:1px solid var(--bd)"><div style="font-weight:600;font-size:13px">${i+1}. ${esc(s.place)}</div><label class="text-xs text-fg3" style="display:block;margin-top:6px">요지</label><input type="text" class="ol-gist ol-in" value="${esc(s.gist||'')}" placeholder="이 섹션에서 말할 것" style="width:100%;box-sizing:border-box;margin-top:2px"><label class="text-xs text-fg3" style="display:block;margin-top:6px">강조점</label><input type="text" class="ol-emph ol-in" value="${esc(s.emphasis||'')}" placeholder="특히 살릴 포인트" style="width:100%;box-sizing:border-box;margin-top:2px"><select class="ol-len ol-in" style="margin-top:6px;max-width:120px">${['짧게','보통','길게'].map(v=>`<option ${s.length===v?'selected':''}>${v}</option>`).join('')}</select></div>`).join('')
       +`</div>`;
     h+=`<div class="card"><div class="card-label">꿀팁 <span class="text-xs text-fg3">(한 줄에 하나)</span></div><textarea id="olTips" class="ol-in" style="width:100%;min-height:60px;box-sizing:border-box">${esc((o.tips||[]).join('\n'))}</textarea><div class="card-label mt-8">아웃트로 방향</div><input type="text" id="olOutro" class="ol-in" value="${esc(o.outro||'')}" style="width:100%;box-sizing:border-box"></div>`;
     h+=`<div class="text-xs text-fg3" id="olSaveInd"></div>`
@@ -942,9 +943,9 @@ h+=`</div>`;
 // 초안 선택
 if(drafts.length>1){h+=`<div class="flex gap-6 mb-8">`+drafts.map((d,i)=>`<button class="btn ${i===curDraft?'btn-pri':'btn-ghost'} btn-sm" onclick="loadBlocks(${i})">초안${i+1}</button>`).join('')+`</div>`}
 const sw=(drafts[curDraft]||{}).seo_warnings||[];if(sw.length){h+=`<div class="card" style="background:#FDF3E7;border-color:#EED9B8"><div class="card-label">⚠️ SEO 점검</div>${sw.map(x=>`<div class="text-xs" style="color:#8A6D1F;margin:2px 0">· ${esc(x)}</div>`).join('')}</div>`}
+h+=`<div class="card"><div class="card-label">제목 <span id="blkSaveInd" class="text-xs text-fg3" style="font-weight:400;margin-left:6px">${esc(_blkInd)}</span></div><input type="text" id="bTitle" value="${esc(draftTitle)}" oninput="draftTitle=this.value;updatePreview();scheduleBlocksSave()"></div>`;
 if(drafts.length){h+=sectionCardHtml()}
 if(drafts.length){h+=`<div class="card"><div class="card-label">✍️ 피드백으로 다듬기</div><div class="text-xs text-fg3 mb-6">가안에 대한 요청을 적으면 AI가 최종본으로 재작성합니다. 사진·지역정보·경로는 그대로 보존됩니다.</div><textarea id="fbText" style="min-height:52px" placeholder="예: 더 감성적으로 / 2일차 설명 늘려줘 / 마무리를 따뜻하게"></textarea><button class="btn btn-pri btn-sm mt-6" onclick="doRevise()">✨ 최종본 재작성</button></div>`}
-h+=`<div class="card"><div class="card-label">제목 <span id="blkSaveInd" class="text-xs text-fg3" style="font-weight:400;margin-left:6px">${esc(_blkInd)}</span></div><input type="text" id="bTitle" value="${esc(draftTitle)}" oninput="draftTitle=this.value;updatePreview();scheduleBlocksSave()"></div>`;
 h+=`<div class="flex gap-6 mb-8"><button class="btn btn-ghost btn-sm" onclick="addBlk('text')">+ 텍스트</button><button class="btn btn-ghost btn-sm" onclick="addBlk('separator')">+ 구분선</button></div>`;
 h+='<div id="bList">';
 const icons={text:'📝',image:'🖼',separator:'─',styled_label:'🏷',heading:'📌',route:'🗺',map_link:'📍'};
