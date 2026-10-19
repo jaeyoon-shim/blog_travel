@@ -927,7 +927,7 @@ try{const r=await fetch(`${API}/api/seo`,{method:'POST',headers:{'Content-Type':
 async function loadDrafts(gi){curGroup=gi;const r=await fetch(`${API}/api/drafts/${gi}`);drafts=await r.json();
 if(drafts.length){draftTitle=drafts[0].title;draftTags=drafts[0].tags;await loadBlocks(0)}}
 
-async function loadBlocks(di){curDraft=di;const r=await fetch(`${API}/api/blocks/${curGroup}/${di}`);const d=await r.json();
+async function loadBlocks(di){await flushBlocksSave();curDraft=di;const r=await fetch(`${API}/api/blocks/${curGroup}/${di}`);const d=await r.json();
 blocks=d.blocks||[];draftTitle=d.title||draftTitle;draftTags=d.tags||draftTags;selBlock=-1;if(step===DRAFT_STEP){renderEditor();updatePreview()}}
 
 function renderEditor(){$et.textContent='✏️ 원고 편집';$badge.textContent=`${blocks.length}블록`;
@@ -943,7 +943,7 @@ h+=`</div>`;
 if(drafts.length>1){h+=`<div class="flex gap-6 mb-8">`+drafts.map((d,i)=>`<button class="btn ${i===curDraft?'btn-pri':'btn-ghost'} btn-sm" onclick="loadBlocks(${i})">초안${i+1}</button>`).join('')+`</div>`}
 const sw=(drafts[curDraft]||{}).seo_warnings||[];if(sw.length){h+=`<div class="card" style="background:#FDF3E7;border-color:#EED9B8"><div class="card-label">⚠️ SEO 점검</div>${sw.map(x=>`<div class="text-xs" style="color:#8A6D1F;margin:2px 0">· ${esc(x)}</div>`).join('')}</div>`}
 if(drafts.length){h+=`<div class="card"><div class="card-label">✍️ 피드백으로 다듬기</div><div class="text-xs text-fg3 mb-6">가안에 대한 요청을 적으면 AI가 최종본으로 재작성합니다. 사진·지역정보·경로는 그대로 보존됩니다.</div><textarea id="fbText" style="min-height:52px" placeholder="예: 더 감성적으로 / 2일차 설명 늘려줘 / 마무리를 따뜻하게"></textarea><button class="btn btn-pri btn-sm mt-6" onclick="doRevise()">✨ 최종본 재작성</button></div>`}
-h+=`<div class="card"><div class="card-label">제목</div><input type="text" id="bTitle" value="${esc(draftTitle)}" oninput="draftTitle=this.value;updatePreview()"></div>`;
+h+=`<div class="card"><div class="card-label">제목 <span id="blkSaveInd" class="text-xs text-fg3" style="font-weight:400;margin-left:6px">${esc(_blkInd)}</span></div><input type="text" id="bTitle" value="${esc(draftTitle)}" oninput="draftTitle=this.value;updatePreview();scheduleBlocksSave()"></div>`;
 h+=`<div class="flex gap-6 mb-8"><button class="btn btn-ghost btn-sm" onclick="addBlk('text')">+ 텍스트</button><button class="btn btn-ghost btn-sm" onclick="addBlk('separator')">+ 구분선</button></div>`;
 h+='<div id="bList">';
 const icons={text:'📝',image:'🖼',separator:'─',styled_label:'🏷',heading:'📌',route:'🗺',map_link:'📍'};
@@ -960,6 +960,7 @@ h+=`<button class="btn btn-ok w-full mt-6" onclick="go(PUB_STEP)">발행 준비 
 $eb.innerHTML=h}
 
 async function doRevise(){const t=(document.getElementById('fbText')?.value||'').trim();if(!t){alert('피드백을 입력해주세요');return}
+await flushBlocksSave();
 if(!confirm('재작성하면 이 초안의 블록 수동 편집 내용이 초기화됩니다. 계속할까요?'))return;
 stat('피드백 반영해 재작성 중...',true);
 const r=await fetch(`${API}/api/revise`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gi:curGroup,di:curDraft,feedback:t})});
@@ -967,15 +968,34 @@ const d=await r.json();if(d.error){alert(d.error);stat('');return}
 startPoll(async p=>{if(p.status==='done'){const rr=await fetch(`${API}/api/drafts/${curGroup}`);drafts=await rr.json();await loadBlocks(curDraft);renderEditor();updatePreview();stat('✅ 최종본 재작성 완료')}else{alert(p.message||'재작성 실패 — 원본은 유지됩니다')}})}
 
 async function switchGroup(gi){if(gi===curGroup)return;
+await flushBlocksSave();
 const r=await fetch(`${API}/api/drafts/${gi}`);const d=await r.json();
 if(d.length){curGroup=gi;drafts=d;draftTitle=d[0].title;draftTags=d[0].tags;await loadBlocks(0);renderEditor();updatePreview()}
 else{alert(`그룹 ${gi+1}의 초안이 아직 없습니다. STEP 4에서 전체 생성을 해주세요.`)}}
 
 function selBlk(i){selBlock=i;renderEditor();const pb=document.getElementById('previewBody');if(pb){pb.scrollTop=(pb.scrollHeight*(i/Math.max(blocks.length,1)))-80}}
-function editBlk(v){if(selBlock>=0&&selBlock<blocks.length){blocks[selBlock].content=v;updatePreview()}}
-function mvBlk(i,d){const j=i+d;if(j<0||j>=blocks.length)return;[blocks[i],blocks[j]]=[blocks[j],blocks[i]];if(selBlock===i)selBlock=j;else if(selBlock===j)selBlock=i;renderEditor();updatePreview()}
-function delBlk(i){blocks.splice(i,1);if(selBlock>=blocks.length)selBlock=blocks.length-1;renderEditor();updatePreview()}
-function addBlk(t){const i=selBlock>=0?selBlock+1:blocks.length;blocks.splice(i,0,t==='text'?{type:'text',content:'(새 텍스트)'}:{type:'separator'});selBlock=i;renderEditor();updatePreview()}
+function editBlk(v){if(selBlock>=0&&selBlock<blocks.length){blocks[selBlock].content=v;updatePreview();scheduleBlocksSave()}}
+function mvBlk(i,d){const j=i+d;if(j<0||j>=blocks.length)return;[blocks[i],blocks[j]]=[blocks[j],blocks[i]];if(selBlock===i)selBlock=j;else if(selBlock===j)selBlock=i;scheduleBlocksSave();renderEditor();updatePreview()}
+function delBlk(i){blocks.splice(i,1);if(selBlock>=blocks.length)selBlock=blocks.length-1;scheduleBlocksSave();renderEditor();updatePreview()}
+function addBlk(t){const i=selBlock>=0?selBlock+1:blocks.length;blocks.splice(i,0,t==='text'?{type:'text',content:'(새 텍스트)'}:{type:'separator'});selBlock=i;scheduleBlocksSave();renderEditor();updatePreview()}
+
+// ── 블록 편집 서버 저장(디바운스) + 미저장 표시 + 이탈 경고 ──
+// 저장할 대상(gi/di)과 내용은 "예약 시점"에 캡처한다 — 타이머 전에 일차를 바꿔도
+// 다른 일차에 잘못 저장되지 않게. 일차/초안 전환·재작성 전에는 flushBlocksSave()로 먼저 비운다.
+let _blkTimer=null,_blkPending=null,_blkDirty=false,_blkInd='';
+function setBlkInd(t){_blkInd=t;const e=document.getElementById('blkSaveInd');if(e)e.textContent=t}
+function scheduleBlocksSave(){_blkDirty=true;
+  _blkPending={gi:curGroup,di:curDraft,body:JSON.stringify({blocks,title:draftTitle})};
+  setBlkInd('● 저장 안 됨');clearTimeout(_blkTimer);_blkTimer=setTimeout(flushBlocksSave,1200)}
+async function flushBlocksSave(){clearTimeout(_blkTimer);const p=_blkPending;if(!p)return true;_blkPending=null;
+  setBlkInd('저장 중…');
+  try{const r=await fetch(`${API}/api/blocks/${p.gi}/${p.di}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:p.body});
+    if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||`HTTP ${r.status}`)}
+    const dd=drafts[p.di];if(p.gi===curGroup&&dd)dd.edited=true;
+    if(!_blkPending){_blkDirty=false;setBlkInd('✓ 저장됨')}
+    return true}
+  catch(e){_blkPending=_blkPending||p;setBlkInd('저장 실패 — '+e.message);return false}}
+window.addEventListener('beforeunload',e=>{if(_blkDirty){e.preventDefault();e.returnValue=''}});
 
 // ═══ STEP 4: 발행 ═══
 function renderPublishStep(){$et.textContent='🚀 발행';$badge.textContent='STEP 4';
