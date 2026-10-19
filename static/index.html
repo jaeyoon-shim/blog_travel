@@ -797,8 +797,9 @@ $eb.innerHTML=`
 <div class="card"><div class="card-label">🔍 네이버 상위 글 분석 (SEO · 선택)</div><div class="text-xs text-fg3 mb-6">확정된 지역으로 상위 블로그 구조를 참고해 제목/키워드를 강화합니다. 실패해도 생성엔 영향 없습니다.</div><button class="btn btn-ghost btn-sm" onclick="doSeo()">상위 글 분석 실행</button><div id="seoResult" class="mt-6"></div></div>
 <div class="card-label mt-12">📅 날짜별 일정 — 생성할 Day를 고르세요</div>
 <div id="dayList" class="mt-6"><div class="text-xs text-fg3">불러오는 중…</div></div>
-<div class="flex gap-6 mt-12">
-  <button class="btn btn-pri" style="flex:1" onclick="doGen()">✨ 선택한 Day만 생성</button>
+<button class="btn btn-pri w-full mt-12" onclick="openOutline(curGroup)">📋 선택한 Day 목차부터 쓰기 (권장)</button>
+<div class="flex gap-6 mt-6">
+  <button class="btn btn-ghost" style="flex:1" onclick="doGen()">✨ 목차 없이 바로 생성</button>
   <button class="btn btn-ok" style="flex:1" onclick="doGenAll()">🚀 전체 일정 생성</button>
 </div>
 <button class="btn btn-ghost w-full mt-6" onclick="doSaveDrafts()">💾 초안 저장 (재시작해도 유지)</button>
@@ -815,15 +816,95 @@ function renderDayList(){
   if(!groups.length){c.innerHTML='<div class="text-xs text-fg3">일정이 없습니다. 계획 검수 단계에서 확인하세요.</div>';return}
   c.innerHTML=groups.map((g,i)=>`<div class="block-item ${i===curGroup?'selected':''}" onclick="curGroup=${i};renderDayList()"><div class="bt">Day ${i+1}${g.label?(' · '+esc(g.label)):''}</div><div class="bc">${esc(g.course_line||'(장소 미정)')} · 사진 ${g.photo_count||0}장</div></div>`).join('')}
 
-async function doGen(){show('AI 초안 생성 중...');
+// opts.useOutline: 승인된 목차로 생성(서버가 목차 미승인이면 400)
+async function doGen(opts={}){
 const memos={...placeMemos};document.querySelectorAll('.memo-in').forEach(e=>{if(e.value)memos[e.dataset.place]=e.value});
-await fetch(`${API}/api/generate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_index:curGroup,title:tripTitle,structure:document.getElementById('structSel')?.value||'감성 후기형',place_memos:memos,route_modes:routeModes})});
+const gr=await fetch(`${API}/api/generate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_index:curGroup,title:tripTitle,structure:document.getElementById('structSel')?.value||'감성 후기형',place_memos:memos,route_modes:routeModes,use_outline:!!opts.useOutline})});
+if(!gr.ok){const e=await gr.json().catch(()=>({}));alert('❌ '+(e.error||`생성 요청 실패 (HTTP ${gr.status})`));return}
+show('AI 초안 생성 중...');
 startPoll(async p=>{
   if(p.status==='error'){alert('❌ 초안 생성 실패\n\n'+(p.message||'알 수 없는 오류')+'\n\n(OpenAI 키/모델/네트워크를 확인하세요)');return}
   if(p.status==='done'){await loadDrafts(curGroup);
     if(!drafts||!drafts.length){alert('초안이 만들어지지 않았습니다.\n원인: OpenAI 호출 실패 가능(키/모델/잔액/네트워크). 설정에서 OPENAI_API_KEY·모델을 확인하세요.');return}
     go(DRAFT_STEP)}
 })}
+
+// ═══ STEP 3: 목차 (쓰기 전에 사람이 승인하는 글 설계) ═══
+// 섹션 순서는 방문 순서로 고정(서버가 재정규화) — 순서 변경은 계획 검수에서.
+let outlineData=null, outlineGi=0, _olTimer=null, _olPlaces=[], _olLabel='';
+async function openOutline(gi){
+  outlineGi=gi; curGroup=gi;
+  $et.textContent='📋 목차'; $badge.textContent='STEP 3'; setPreviewPanel(false);
+  $eb.innerHTML='<div class="text-xs text-fg3">불러오는 중…</div>';
+  try{const r=await fetch(`${API}/api/outline/${gi}`);if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    const d=await r.json();outlineData=d.outline;_olPlaces=d.places||[];_olLabel=d.label||'';}
+  catch(e){$eb.innerHTML=`<div class="card" style="border-color:var(--err)"><div style="color:var(--err);font-size:12px">❌ 목차를 불러오지 못했습니다: ${esc(e.message)}</div></div><button class="btn btn-ghost w-full mt-6" onclick="renderGenerate()">← 일차 목록으로</button>`;return}
+  renderOutlineEditor();
+}
+function renderOutlineEditor(){
+  const lbl=_olLabel||`${outlineGi+1}일차`;
+  let h=`<div class="card-label">📋 ${esc(lbl)} 목차 — 쓰기 전에 글의 뼈대를 정합니다</div>`;
+  if(!outlineData){
+    h+=`<div class="card"><div class="text-sm text-fg2 mb-6">방문 순서대로 ${_olPlaces.length}개 장소 섹션이 만들어집니다.</div>${_olPlaces.map((p,i)=>`<div class="text-xs text-fg3">${i+1}. ${esc(p)}</div>`).join('')}</div>`
+      +`<button class="btn btn-pri w-full mt-8" onclick="doMakeOutline(false)">📋 목차 만들기</button>`;
+  } else {
+    const o=outlineData, cands=o.title_candidates||[];
+    h+=`<div class="card"><div class="card-label">제목 확정</div>`
+      +cands.map((c,i)=>`<label style="display:flex;gap:6px;align-items:center;font-size:13px;margin:4px 0;cursor:pointer"><input type="radio" name="olTitleR" ${o.title===c.title?'checked':''} onchange="pickOutlineTitle(${i})">${esc(c.title)}${c.has_keyword?' <span class="text-xs" style="color:var(--ok)">키워드 포함</span>':''}</label>`).join('')
+      +`<input type="text" id="olTitle" class="ol-in" value="${esc(o.title||'')}" placeholder="직접 입력하거나 위 후보를 고르세요 (비우면 AI가 제목을 정함)" style="width:100%;box-sizing:border-box;margin-top:6px"></div>`;
+    h+=`<div class="card"><div class="card-label">인트로 방향</div><textarea id="olIntro" class="ol-in" style="width:100%;min-height:48px;box-sizing:border-box">${esc(o.intro_hook||'')}</textarea></div>`;
+    h+=`<div class="card"><div class="card-label">장소 섹션 <span class="text-xs text-fg3">(방문 순서 고정 — 순서 변경은 계획 검수에서)</span></div>`
+      +(o.sections||[]).map((s,i)=>`<div class="ol-sec" data-i="${i}" style="padding:8px 0;border-top:1px solid var(--bd)"><div style="font-weight:600;font-size:13px">${i+1}. ${esc(s.place)}</div><input class="ol-gist ol-in" value="${esc(s.gist||'')}" placeholder="요지 — 이 섹션에서 말할 것" style="width:100%;box-sizing:border-box;margin-top:4px"><input class="ol-emph ol-in" value="${esc(s.emphasis||'')}" placeholder="강조점" style="width:100%;box-sizing:border-box;margin-top:4px"><select class="ol-len ol-in" style="margin-top:4px;max-width:120px">${['짧게','보통','길게'].map(v=>`<option ${s.length===v?'selected':''}>${v}</option>`).join('')}</select></div>`).join('')
+      +`</div>`;
+    h+=`<div class="card"><div class="card-label">꿀팁 <span class="text-xs text-fg3">(한 줄에 하나)</span></div><textarea id="olTips" class="ol-in" style="width:100%;min-height:60px;box-sizing:border-box">${esc((o.tips||[]).join('\n'))}</textarea><div class="card-label mt-8">아웃트로 방향</div><input type="text" id="olOutro" class="ol-in" value="${esc(o.outro||'')}" style="width:100%;box-sizing:border-box"></div>`;
+    h+=`<div class="text-xs text-fg3" id="olSaveInd"></div>`
+      +`<button class="btn btn-pri w-full mt-8" onclick="approveOutlineAndGen()">✨ 이 목차로 본문 쓰기</button>`
+      +`<button class="btn btn-ghost w-full mt-6" onclick="doMakeOutline(true)">🔄 목차 다시 만들기 (확정 제목 유지)</button>`;
+  }
+  h+=`<button class="btn btn-ghost w-full mt-6" onclick="genWithoutOutline()">목차 없이 바로 쓰기</button>`
+    +`<button class="btn btn-ghost w-full mt-6" onclick="renderGenerate()">← 일차 목록으로</button>`;
+  $eb.innerHTML=h;
+  $eb.querySelectorAll('.ol-in').forEach(el=>el.addEventListener('input',scheduleOutlineSave));
+}
+function pickOutlineTitle(i){const c=((outlineData||{}).title_candidates||[])[i];if(!c)return;
+  const t=document.getElementById('olTitle');if(t)t.value=c.title;scheduleOutlineSave()}
+function collectOutline(){if(!outlineData)return null;const o=outlineData;
+  const v=id=>(document.getElementById(id)?.value||'').trim();
+  o.title=v('olTitle');o.intro_hook=v('olIntro');o.outro=v('olOutro');
+  o.tips=v('olTips').split('\n').map(x=>x.trim()).filter(Boolean);
+  document.querySelectorAll('.ol-sec').forEach(el=>{const s=(o.sections||[])[+el.dataset.i];if(!s)return;
+    s.gist=el.querySelector('.ol-gist').value.trim();s.emphasis=el.querySelector('.ol-emph').value.trim();s.length=el.querySelector('.ol-len').value});
+  return o}
+async function saveOutline(extra={}){const o=collectOutline();if(!o)return false;Object.assign(o,extra);
+  const r=await fetch(`${API}/api/outline/${outlineGi}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});
+  if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||`HTTP ${r.status}`)}
+  outlineData=await r.json();return true}
+function setOlInd(t){const e=document.getElementById('olSaveInd');if(e)e.textContent=t}
+function scheduleOutlineSave(){setOlInd('편집 중…');clearTimeout(_olTimer);
+  _olTimer=setTimeout(async()=>{setOlInd('저장 중…');try{await saveOutline();setOlInd('✓ 저장됨')}catch(e){setOlInd('저장 실패 — '+e.message)}},800)}
+async function doMakeOutline(regen){
+  if(regen&&!confirm('목차 내용이 새로 만들어집니다(확정한 제목은 유지). 계속할까요?'))return;
+  clearTimeout(_olTimer);
+  if(outlineData){try{await saveOutline()}catch(e){}}   // 확정 제목을 서버에 먼저 남긴다
+  const r=await fetch(`${API}/api/outline/${outlineGi}`,{method:'POST'});
+  if(!r.ok){const e=await r.json().catch(()=>({}));alert('❌ '+(e.error||`목차 생성 요청 실패 (HTTP ${r.status})`));return}
+  show('목차 만드는 중...');
+  startPoll(async p=>{
+    if(p.status==='error'){alert(p.message||'❌ 목차 생성 실패 — 다시 시도하거나 목차 없이 바로 쓰기');return}
+    await openOutline(outlineGi)})}
+async function approveOutlineAndGen(){
+  clearTimeout(_olTimer);
+  try{await saveOutline({approved:true})}catch(e){alert('목차 저장 실패: '+e.message);return}
+  if(!(await confirmDropEdited(outlineGi)))return;
+  curGroup=outlineGi; doGen({useOutline:true})}
+async function genWithoutOutline(){
+  if(!(await confirmDropEdited(outlineGi)))return;
+  curGroup=outlineGi; doGen({})}
+// 이 일차에 직접 고친 블록 편집이 있으면 재생성 전에 확인(재생성은 블록 편집을 초기화)
+async function confirmDropEdited(gi){
+  try{const r=await fetch(`${API}/api/drafts/${gi}`);if(!r.ok)return true;const ds=await r.json();
+    if(ds.some(d=>d.edited))return confirm('직접 고친 블록 편집이 초기화됩니다. 계속할까요?');}catch(e){}
+  return true}
 
 async function doGenAll(){show('전체 그룹 생성 중...');
 const memos={...placeMemos};document.querySelectorAll('.memo-in').forEach(e=>{if(e.value)memos[e.dataset.place]=e.value});
