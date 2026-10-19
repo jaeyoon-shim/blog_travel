@@ -413,12 +413,40 @@ function renderPrepare(){
     `<details class="card" style="padding:10px 12px"${open}>`
     + `<summary style="cursor:pointer;font-weight:600;font-size:13px">⚙️ 글 설정 ${profileName?`<span class="text-xs text-fg3">· ${esc(profileName)}</span>`:''}</summary>`
     + `<div style="margin-top:10px">${settingsHtml()}</div></details>`
+    + briefCardHtml()
     + `<div class="card-label mt-12">📸 사진 업로드</div>`
     + uploadHtml()
     + `<button class="btn btn-pri w-full mt-8 hidden" id="prepNext" onclick="go(PLAN_STEP)">다음: 계획 검수 →</button>`;
   toggleStyleSource();
   bindUpload();
+  loadBrief();
   setPreviewPanel(false);      // 준비 단계는 보여줄 결과물이 없다 → 본문 전폭
+}
+
+// ── 글 기획 브리프(여행 공통) — 분석 전에도 입력 가능, 서버가 plan/pending에 보관 ──
+const BRIEF_FIELDS=[['concept','글 컨셉','예: 부모님 모시고 간 느긋한 온천 여행'],['reader','예상 독자','예: 50~60대 부모님과 여행을 계획하는 30대'],['message','핵심 메시지','예: 무리하지 않는 동선이 효도 여행의 핵심'],['must_include','꼭 넣을 것','예: 휠체어/계단 정보, 대기 시간'],['avoid','빼고 싶은 것','예: 과장된 맛 표현']];
+let tripBrief={}, _briefTimer=null;
+function briefCardHtml(){
+  return `<div class="card mt-12"><div class="card-label">📝 이 여행 이야기 <span class="text-xs text-fg3">(선택 · AI가 글 방향으로 따릅니다)</span></div>`
+    + BRIEF_FIELDS.map(([k,lab,ph])=>`<div class="text-xs text-fg2" style="margin:8px 0 3px">${lab}</div><input type="text" class="brief-in" data-k="${k}" placeholder="${esc(ph)}" value="${esc(tripBrief[k]||'')}" oninput="scheduleBriefSave()" style="width:100%;box-sizing:border-box">`).join('')
+    + `<div class="text-xs text-fg3 mt-6" id="briefSaveInd"></div></div>`;
+}
+async function loadBrief(){
+  try{const r=await fetch(`${API}/api/brief`);if(!r.ok)return;const d=await r.json();tripBrief=d.brief||{};
+    document.querySelectorAll('.brief-in').forEach(el=>{el.value=tripBrief[el.dataset.k]||''});}catch(e){}
+}
+function scheduleBriefSave(){
+  const ind=document.getElementById('briefSaveInd');if(ind)ind.textContent='편집 중…';
+  clearTimeout(_briefTimer);_briefTimer=setTimeout(saveBrief,800);
+}
+async function saveBrief(){
+  const b={};document.querySelectorAll('.brief-in').forEach(el=>{b[el.dataset.k]=el.value.trim()});
+  const ind=document.getElementById('briefSaveInd');
+  try{const r=await fetch(`${API}/api/brief`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({brief:b})});
+    if(!r.ok)throw new Error(`HTTP ${r.status}`);const d=await r.json();tripBrief=d.brief||b;
+    if(planData)planData.brief=tripBrief;   // 2단계 savePlan이 옛 브리프로 덮지 않게 미러
+    if(ind)ind.textContent='✓ 저장됨';
+  }catch(e){if(ind)ind.textContent='저장 실패 — '+e.message}
 }
 
 async function loadProjects(){try{const r=await fetch(`${API}/api/projects`);const d=await r.json();const sel=document.getElementById('projSel');if(!sel)return;
@@ -574,10 +602,16 @@ function renderPlan(p){const root=document.getElementById('planRoot');if(!root)r
     return}
   const un=p.unmatched_receipts||[];
   const unHtml=un.length?`<div class="card" style="border-color:var(--warn)"><div class="card-label">🧾 미배정 영수증 ${un.length}</div><div class="text-xs text-fg3 mb-6">어느 장소 것인지 지정하세요</div>${un.map((r,i)=>`<div style="margin:6px 0;padding:6px 8px;background:var(--sf3);border-radius:6px"><div style="font-size:11px;color:var(--fg2);margin-bottom:4px">🧾 ${esc(r.store_name||'(가게명?)')} ${r.amount!=null?esc((r.currency||'')+r.amount):''}${r.date?' · '+esc(r.date):''}</div><select onchange="assignReceipt(${i},this.value)" style="font-size:11px;width:100%;max-width:260px"><option value="">장소 선택…</option>${stopOptions(null)}</select></div>`).join('')}</div>`:'';
-  root.innerHTML=unHtml+p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>stopCard(s)).join('')}</div>`).join('')
+  root.innerHTML=unHtml+p.days.map((d,di)=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${dayBriefHtml(p,d,di)}${(d.stops||[]).map(s=>stopCard(s)).join('')}</div>`).join('')
     +((p.undated_photo_ids&&p.undated_photo_ids.length)?`<div class="text-xs text-fg3 mt-6">📅 날짜 미상 사진 ${p.undated_photo_ids.length}장</div>`:'');
   window._plan=p; renderOutline(); renderPlanView(p);}
 
+// 일차 보충 브리프 — 비우면 여행 공통 값을 상속(placeholder로 보여줌). #planRoot 자동저장 범위 안.
+function dayBriefHtml(p,d,di){
+  const tb=p.brief||{}, db=d.brief||{};
+  const row=(cls,k,lab)=>`<div class="text-xs text-fg2" style="margin:6px 0 3px">${lab}</div><input class="${cls}" value="${esc(db[k]||'')}" placeholder="${esc(tb[k]?'비우면: '+tb[k]:'(여행 공통 값 없음)')}" style="width:100%;font-size:12px;padding:7px 10px;box-sizing:border-box">`;
+  return `<div class="day-brief" data-day="${di}" style="background:var(--bg);border:1px dashed var(--bd);border-radius:10px;padding:8px 10px;margin:6px 0 4px"><div class="text-xs" style="font-weight:600;color:var(--pri)">📝 이 날의 이야기 (선택)</div>${row('db-message','message','핵심 메시지')}${row('db-must','must_include','꼭 넣을 것')}${row('db-avoid','avoid','빼고 싶은 것')}</div>`;
+}
 function renderPlanView(p){
   const el=document.getElementById('planView'); if(!el)return;
   el.innerHTML=p.days.map(d=>`<div class="card"><div class="card-label">Day ${esc(''+d.day_no)} (${esc(d.date)||'날짜 미상'})</div>${(d.stops||[]).map(s=>{
@@ -707,6 +741,8 @@ function splitPhoto(pid,fromId){
 
 function collectPlan(){if(!planData)return;
   if(typeof tripTitle==='string')planData.trip_title=tripTitle;
+  document.querySelectorAll('.day-brief').forEach(el=>{const d=(planData.days||[])[+el.dataset.day];if(!d)return;
+    d.brief={message:el.querySelector('.db-message').value.trim(),must_include:el.querySelector('.db-must').value.trim(),avoid:el.querySelector('.db-avoid').value.trim()}});
   document.querySelectorAll('.stop').forEach(el=>{const s=findStop(planData,el.dataset.stop);if(!s)return;
     s.name=el.querySelector('.f-name').value.trim();s.name_source=s.name?'user':'none';
     s.events=el.querySelector('.f-events').value.split('\n').map(x=>x.trim()).filter(Boolean);
