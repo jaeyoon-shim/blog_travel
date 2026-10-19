@@ -2401,3 +2401,90 @@ def test_revise_section_success_and_rejections(monkeypatch):
     monkeypatch.setattr(g.client.chat.completions, "create", boom)
     assert g.revise_section(post, key, "고쳐줘")[0] is None
     assert post["content"] == _SEC_HTML
+
+
+class _SecGen(_FakeGen):
+    """섹션 라우트용 — revise_section/revise_draft/generate_drafts 스텁."""
+    def __init__(self):
+        super().__init__()
+        self.next_content = _SEC_HTML
+    def generate_drafts(self, group, label, title="", na=None, sa=None, **kw):
+        self.calls.append(("drafts", kw.get("brief"), kw.get("outline")))
+        return [{"title": "새 초안", "content": self.next_content, "tags": []}]
+    def revise_section(self, post, key, instruction, outline=None, naver_analysis=None):
+        self.calls.append(("revise_section", key, instruction))
+        if instruction == "실패":
+            return None, "보호 요소가 훼손됐습니다"
+        new = dict(post)
+        new["content"] = post["content"].replace("소개2", "고친 소개2")
+        new["edited_blocks"] = None
+        return new, ""
+    def revise_draft(self, post, feedback, naver_analysis=None):
+        new = dict(post)
+        new["content"] = post["content"].replace("소개1", "전체재작성1").replace("소개2", "전체재작성2")
+        return new
+
+
+def test_section_routes_revise_lock_and_regenerate(monkeypatch, tmp_path):
+    from core import split_sections
+    gen = _SecGen()
+    app_mod = _outline_env(monkeypatch, tmp_path, gen=gen)
+    app_mod.state["group_states"] = {0: {"drafts": [
+        {"title": "t", "content": _SEC_HTML, "tags": [], "edited_blocks": [{"type": "text"}]}]}}
+    c = app_mod.app.test_client()
+    d = c.get('/api/drafts/0').get_json()[0]
+    assert [s["key"] for s in d["sections"]] == [
+        "__intro__", "연화의탕", "이자카야", "연화의탕 (재방문)", "__tips__"]
+    assert d["sections"][0]["label"] == "인트로" and d["locked_sections"] == [] and d["edited"]
+    # 섹션 다시 쓰기
+    r = c.post('/api/revise_section', json={"gi": 0, "di": 0, "key": "이자카야", "instruction": "생생하게"})
+    assert r.status_code == 200 and app_mod.state["progress"]["status"] == "done"
+    assert "고친 소개2" in app_mod.state["group_states"][0]["drafts"][0]["content"]
+    assert (tmp_path / "drafts" / "group_0.json").exists()
+    # 실패 → error + 사유, 원본 유지
+    before = app_mod.state["group_states"][0]["drafts"][0]["content"]
+    c.post('/api/revise_section', json={"gi": 0, "di": 0, "key": "이자카야", "instruction": "실패"})
+    p = app_mod.state["progress"]
+    assert p["status"] == "error" and "보호 요소" in p["message"] and "원본 유지" in p["message"]
+    assert app_mod.state["group_states"][0]["drafts"][0]["content"] == before
+    # 고정 / 해제
+    r = c.post('/api/lock_section', json={"gi": 0, "di": 0, "key": "연화의탕", "locked": True})
+    assert r.get_json()["locked_sections"] == ["연화의탕"]
+    assert c.post('/api/lock_section', json={"gi": 0, "di": 0, "key": "없음"}).status_code == 400
+    # 고정 섹션은 다시 쓰기 거부
+    assert c.post('/api/revise_section', json={"gi": 0, "di": 0, "key": "연화의탕",
+                                               "instruction": "x"}).status_code == 400
+    # 전체 재생성: 고정 섹션은 이전 HTML 바이트 그대로, 나머지는 새 초안
+    locked_html = dict(split_sections(before))["연화의탕"]
+    gen.next_content = before.replace("소개1", "재생성1").replace("고친 소개2", "재생성2")
+    c.post('/api/generate', json={"group_index": 0})
+    new = app_mod.state["group_states"][0]["drafts"][0]
+    assert dict(split_sections(new["content"]))["연화의탕"] == locked_html
+    assert "재생성2" in new["content"] and "재생성1" not in new["content"]
+    assert new["locked_sections"] == ["연화의탕"]
+    # 사진 구성이 바뀐 고정 섹션은 이식하지 않고 완료 메시지에 밝힌다
+    gen.next_content = new["content"].replace('data-files="a.jpg|b.jpg"', 'data-files="a.jpg"')
+    c.post('/api/generate', json={"group_index": 0})
+    assert "연화의탕" in app_mod.state["progress"]["message"]
+    assert app_mod.state["group_states"][0]["drafts"][0]["locked_sections"] == []
+    # 진행 중 409
+    app_mod.state["progress"] = {"status": "generating", "message": "", "percent": 0}
+    assert c.post('/api/revise_section', json={"gi": 0, "di": 0, "key": "이자카야",
+                                               "instruction": "x"}).status_code == 409
+    assert c.post('/api/lock_section', json={"gi": 0, "di": 0, "key": "이자카야"}).status_code == 409
+
+
+def test_revise_clears_edited_blocks_and_keeps_locked(monkeypatch, tmp_path):
+    from core import split_sections
+    gen = _SecGen()
+    app_mod = _outline_env(monkeypatch, tmp_path, gen=gen)
+    app_mod.state["group_states"] = {0: {"drafts": [
+        {"title": "t", "content": _SEC_HTML, "tags": [], "locked_sections": ["연화의탕"],
+         "edited_blocks": [{"type": "text", "content": "x"}]}]}}
+    c = app_mod.app.test_client()
+    c.post('/api/revise', json={"gi": 0, "di": 0, "feedback": "전체 다듬기"})
+    new = app_mod.state["group_states"][0]["drafts"][0]
+    assert new["edited_blocks"] is None
+    assert "전체재작성2" in new["content"]
+    assert "전체재작성1" not in new["content"]          # 고정 섹션(연화의탕)은 되붙임
+    assert dict(split_sections(new["content"]))["연화의탕"] == dict(split_sections(_SEC_HTML))["연화의탕"]

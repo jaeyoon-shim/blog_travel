@@ -14,7 +14,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from core import (Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator,
                   LocalSaver, NaverBlogAnalyzer, StyleAnalyzer, logger,
                   TRIP_BRIEF_KEYS, normalize_brief, merge_brief,
-                  normalize_outline, group_place_names)
+                  normalize_outline, group_place_names, split_sections, splice_locked)
 from posters import NaverPoster, TistoryPoster, html_to_blocks, summarize_publish_results
 
 app = Flask(__name__, static_folder='static')
@@ -697,6 +697,32 @@ def _drafts_for(gi):
     return state["group_states"].get(gi, {}).get("drafts") or []
 
 
+def _carry_locked(old_drafts, new_drafts):
+    """재생성 결과에 이전 초안의 고정 섹션을 같은 순번 초안끼리 이식한다.
+    반환: 이식 못 한(사라졌거나 사진 구성이 바뀐) 고정 섹션 이름 목록 — 호출부가
+    완료 메시지에 밝힌다(사용자 확정을 조용히 버리지 않는다)."""
+    lost = []
+    for i, nd in enumerate(new_drafts or []):
+        od = old_drafts[i] if i < len(old_drafts or []) else None
+        keys = (od or {}).get("locked_sections") or []
+        if not keys:
+            continue
+        html, kept = splice_locked(od.get("content", ""), nd.get("content", ""), keys)
+        nd["content"] = html
+        nd["locked_sections"] = kept
+        lost += [k for k in keys if k not in kept]
+    return lost
+
+
+_SECTION_LABELS = {"__intro__": "인트로", "__tips__": "꿀팁·마무리"}
+
+
+def _section_list(post):
+    """편집 화면 섹션 툴바용 [{key,label}] — 빈 인트로는 뺀다."""
+    return [{"key": k, "label": _SECTION_LABELS.get(k, k)}
+            for k, c in split_sections((post or {}).get("content", "")) if c.strip()]
+
+
 _BUSY_STATUSES = ("generating", "publishing", "revising", "analyzing")
 
 
@@ -1142,10 +1168,14 @@ def api_generate():
                 state["progress"] = {"status":"error",
                     "message":"❌ AI 초안 생성 실패(응답 잘림/파싱 오류) — 다시 시도해주세요","percent":0}
                 return
+            lost = _carry_locked(_drafts_for(gi), dr)   # 고정 섹션은 이전 초안 그대로
             state["group_states"].setdefault(gi,{})["drafts"] = dr
             _save_drafts(gi)
             state["completed"].add(3)
-            state["progress"] = {"status":"done","message":f"✅ {len(dr)}개 초안 완료","percent":100}
+            msg = f"✅ {len(dr)}개 초안 완료"
+            if lost:
+                msg += f" (고정 섹션 {', '.join(lost)}은 장소·사진 구성이 바뀌어 새로 썼습니다)"
+            state["progress"] = {"status":"done","message":msg,"percent":100}
         except Exception as e:
             state["progress"] = {"status":"error","message":f"❌ {e}","percent":0}
     threading.Thread(target=task, daemon=True).start()
@@ -1195,6 +1225,7 @@ def api_generate_all():
                     brief=_brief_for_group(g),
                     outline=_ol if (_ol or {}).get("approved") else None)
                 if dr:
+                    _carry_locked(_drafts_for(gi), dr)
                     state["group_states"].setdefault(gi,{})["drafts"] = dr
                     _save_drafts(gi)
                 else:
@@ -1298,6 +1329,8 @@ def api_revise():
             new_post = state["generator"].revise_draft(
                 drafts[di], feedback, state.get("naver_analysis"))
             if new_post:
+                new_post["edited_blocks"] = None          # 본문이 바뀌면 블록 편집은 무효
+                _carry_locked([drafts[di]], [new_post])   # 고정 섹션은 재작성 전 그대로
                 drafts[di] = new_post
                 _save_drafts(gi)
                 state["progress"] = {"status": "done", "message": "✅ 최종본 재작성 완료", "percent": 100}
@@ -1308,6 +1341,67 @@ def api_revise():
             state["progress"] = {"status": "error", "message": f"❌ {e} (원본 유지)", "percent": 0}
     threading.Thread(target=task, daemon=True).start()
     return jsonify({"started": True})
+
+
+# ── 섹션 보정: 한 섹션만 다시 쓰기 / 고정 ──
+@app.route('/api/revise_section', methods=['POST'])
+def api_revise_section():
+    if _busy():
+        return jsonify({"error": "다른 작업이 진행 중입니다 — 끝난 뒤 다시 시도하세요"}), 409
+    data = request.json or {}
+    gi, di = int(data.get("gi", 0)), int(data.get("di", 0))
+    key = data.get("key") or ""
+    instruction = (data.get("instruction") or "").strip()
+    if not instruction:
+        return jsonify({"error": "지시를 입력해주세요"}), 400
+    drafts = _drafts_for(gi)
+    if di >= len(drafts):
+        return jsonify({"error": "초안 없음"}), 400
+    if key in (drafts[di].get("locked_sections") or []):
+        return jsonify({"error": "고정된 섹션입니다 — 고정을 풀고 다시 쓰세요"}), 400
+    outline = _load_outline(gi)
+    def task():
+        state["progress"] = {"status": "revising", "message": "섹션 다시 쓰는 중...", "percent": 0}
+        try:
+            new_post, reason = state["generator"].revise_section(
+                drafts[di], key, instruction, outline, state.get("naver_analysis"))
+            if new_post:
+                drafts[di] = new_post
+                _save_drafts(gi)
+                state["progress"] = {"status": "done", "message": "✅ 섹션 교체 완료", "percent": 100}
+            else:
+                state["progress"] = {"status": "error", "percent": 0,
+                                     "message": f"❌ 섹션 다시 쓰기 실패 — {reason} (원본 유지)"}
+        except Exception as e:
+            state["progress"] = {"status": "error", "message": f"❌ {e} (원본 유지)", "percent": 0}
+    threading.Thread(target=task, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route('/api/lock_section', methods=['POST'])
+def api_lock_section():
+    if _busy():
+        return jsonify({"error": "다른 작업이 진행 중입니다 — 끝난 뒤 다시 시도하세요"}), 409
+    data = request.json or {}
+    gi, di = int(data.get("gi", 0)), int(data.get("di", 0))
+    key = data.get("key") or ""
+    drafts = _drafts_for(gi)
+    if di >= len(drafts):
+        return jsonify({"error": "초안 없음"}), 400
+    post = drafts[di]
+    keys = [k for k, _ in split_sections(post.get("content", ""))]
+    if key not in keys:
+        return jsonify({"error": "섹션 없음"}), 400
+    cur = [k for k in (post.get("locked_sections") or []) if k in keys]
+    if data.get("locked", True):
+        if key not in cur:
+            cur.append(key)
+    else:
+        cur = [k for k in cur if k != key]
+    post["locked_sections"] = cur
+    _save_drafts(gi)
+    return jsonify({"locked_sections": cur})
+
 
 
 # ── 초안/블록 ──
@@ -1332,7 +1426,10 @@ def api_drafts(gi):
     return jsonify([{"title":d.get("title",""),"content":d.get("content",""),
         "tags":d.get("tags",[]),"meta_description":d.get("meta_description",""),
         "hashtags":d.get("hashtags",[]),
-        "seo_warnings":d.get("seo_warnings",[])} for d in gs.get("drafts",[])])
+        "seo_warnings":d.get("seo_warnings",[]),
+        "locked_sections":d.get("locked_sections") or [],
+        "sections":_section_list(d),
+        "edited":bool(d.get("edited_blocks"))} for d in gs.get("drafts",[])])
 
 
 @app.route('/api/blocks/<int:gi>/<int:di>')
