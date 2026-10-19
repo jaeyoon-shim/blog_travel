@@ -2510,3 +2510,114 @@ def test_blocks_put_then_get_returns_edited(monkeypatch, tmp_path):
     # 디스크 저장 실패 → 500 (실패를 성공으로 승격 금지)
     monkeypatch.setattr(app_mod, "_save_drafts", lambda gi: False)
     assert c.put('/api/blocks/0/0', json={"blocks": edited}).status_code == 500
+
+
+# ── 장소 헤더 정규화 — AI가 장소명을 훼손해도 h2 data-place·표시명은 계획 이름으로 ──
+def _h2(place, text=None):
+    return (f'{_SEC_HDR}\n<p style="font-size:0.8em;color:#8B9467;letter-spacing:3px">PLACE 1</p>\n'
+            f'<h2 data-place="{place}" style="font-size:1.3em;color:#3d3d3d;margin:8px 0;font-weight:600">'
+            f'{place if text is None else text}</h2>\n</div>\n<p>소개 {place}</p>\n')
+
+
+def _h2_pairs(html):
+    import re as _re
+    return [(m.group(1), m.group(2)) for m in _re.finditer(
+        r'<h2\b[^>]*data-place="([^"]*)"[^>]*>(.*?)</h2>', html, _re.S)]
+
+
+_EXPO = "만국박람회 기념공원(千里万博公園)"
+
+
+def test_canonicalize_headers_index_alignment():
+    from core import canonicalize_place_headers
+    html = _h2("만국박람회 기념公園") + _h2("KYK돈까스") + _h2("글리코상")
+    out = canonicalize_place_headers(html, [_EXPO, "KYK돈카스", "도톤보리 글리코상"])
+    assert _h2_pairs(out) == [(_EXPO, _EXPO), ("KYK돈카스", "KYK돈카스"),
+                              ("도톤보리 글리코상", "도톤보리 글리코상")]
+
+
+def test_canonicalize_headers_mixed_script_and_keeps_local_suffix():
+    from core import canonicalize_place_headers
+    # 증거 케이스: 혼합 문자 훼손 → 계획 이름으로
+    out = canonicalize_place_headers(_h2("만국박람회 기념公園"), [_EXPO])
+    assert _h2_pairs(out) == [(_EXPO, _EXPO)]
+    # 표시명이 이미 계획 이름을 담고 있으면(공백 차이·현지어 부기) 표시명은 그대로
+    ok = _h2(_EXPO, "만국박람회 기념공원 (千里万博公園)") + _h2("고후쿠자 극장", "고후쿠자 극장 (五福座)")
+    assert canonicalize_place_headers(ok, [_EXPO, "고후쿠자 극장"]) == ok
+
+
+def test_canonicalize_headers_count_mismatch_monotonic_and_revisit():
+    from core import canonicalize_place_headers
+    places = ["연화의탕", "이자카야", "연화의탕 (재방문)"]
+    # AI가 가운데 장소를 빠뜨림 → 순서대로 정렬, 재방문 구분 유지(병합 금지)
+    html = _h2("연화의 탕") + _h2("연화의탕(재방문)")
+    out = canonicalize_place_headers(html, places)
+    assert [p for p, _ in _h2_pairs(out)] == ["연화의탕", "연화의탕 (재방문)"]
+    # h2가 더 많음(장소 하나를 둘로 쪼갬) — 확신 없는 h2는 그대로, 재정렬 금지
+    html2 = _h2("연화의탕") + _h2("완전히 다른 곳") + _h2("이자까야") + _h2("연화의탕 (재방문)")
+    out2 = canonicalize_place_headers(html2, places)
+    assert [p for p, _ in _h2_pairs(out2)] == ["연화의탕", "완전히 다른 곳", "이자카야", "연화의탕 (재방문)"]
+
+
+def test_canonicalize_headers_no_confident_match_unchanged():
+    from core import canonicalize_place_headers
+    html = _h2("오사카 성") + _h2("우메다 스카이빌딩")
+    assert canonicalize_place_headers(html, ["교토 기요미즈데라", "나라 공원", "고베 항"]) == html
+    assert canonicalize_place_headers(html, []) == html
+    assert canonicalize_place_headers("", ["a"]) == ""
+
+
+def test_canonicalize_headers_preserves_structure():
+    from core import canonicalize_place_headers, split_sections
+    places = ["연화의탕", "이자카야", "연화의탕 (재방문)"]
+    assert canonicalize_place_headers(_SEC_HTML, places) == _SEC_HTML       # 이미 정규 → 무변경(멱등)
+    mangled = _SEC_HTML.replace('data-place="이자카야">이자카야<', 'data-place="이자까야">이자까야<')
+    out = canonicalize_place_headers(mangled, places)
+    assert out == _SEC_HTML                                                # h2 밖(PLACE 라벨·figure·경로카드·별점) 불변
+    assert [k for k, _ in split_sections(out)] == ["__intro__"] + places + ["__tips__"]
+
+
+def test_splice_locked_survives_mangled_regeneration_once_canonicalized():
+    from core import canonicalize_place_headers, splice_locked, split_sections
+    places = [_EXPO, "KYK돈카스"]
+    old = _h2(_EXPO) + '<figure data-files="a.jpg"></figure>\n' + _h2("KYK돈카스") + '<figure data-files="b.jpg"></figure>\n'
+    new = (_h2("만국박람회 기념公園").replace("소개", "새소개") + '<figure data-files="a.jpg"></figure>\n'
+           + _h2("KYK돈카스").replace("소개", "새소개") + '<figure data-files="b.jpg"></figure>\n')
+    _, kept_raw = splice_locked(old, new, [_EXPO])
+    assert kept_raw == []                                                  # 결함 재현: 키 훼손으로 이식 실패
+    out, kept = splice_locked(old, canonicalize_place_headers(new, places), [_EXPO])
+    assert kept == [_EXPO]
+    d = dict(split_sections(out))
+    assert "소개 " + _EXPO in d[_EXPO] and "새소개 KYK돈카스" in d["KYK돈카스"]
+
+
+def test_call_ai_canonicalizes_before_photo_insertion(monkeypatch):
+    import types, json as _json
+    g = TravelBlogGenerator(Config())
+    body = _h2("만국박람회 기념公園") + "[PHOTO:a.jpg]" + _h2("KYK돈까스")
+    monkeypatch.setattr(g.client.chat.completions, "create", lambda **k: types.SimpleNamespace(
+        choices=[types.SimpleNamespace(finish_reason="stop", message=types.SimpleNamespace(
+            content=_json.dumps({"title": "t", "content": body, "tags": []})))]))
+    seen = {}
+    def fake_insert(content, photos):
+        seen["c"] = content
+        return content
+    monkeypatch.setattr(g, "_insert_photos_with_map", fake_insert)
+    photos = [{"location_name": _EXPO, "file_name": "a.jpg"}, {"location_name": "KYK돈카스", "file_name": "b.jpg"}]
+    post = g._call_ai("p", 0.5, photos)
+    assert [p for p, _ in _h2_pairs(seen["c"])] == [_EXPO, "KYK돈카스"]     # 사진·경로·별점 삽입 전에 정규화
+    assert [p for p, _ in _h2_pairs(post["content"])] == [_EXPO, "KYK돈카스"]
+
+
+def test_revise_draft_canonicalizes_headers(monkeypatch):
+    import types
+    g = TravelBlogGenerator(Config())
+    content = _h2(_EXPO) + _h2("KYK돈카스")
+    monkeypatch.setattr(g.client.chat.completions, "create", lambda **k: types.SimpleNamespace(
+        choices=[types.SimpleNamespace(message=types.SimpleNamespace(
+            content=content.replace(_EXPO, "만국박람회 기념公園").replace("소개", "고친소개")))]))
+    post = {"content": content, "tags": [], "title": "t",
+            "photo_results": [{"location_name": _EXPO}, {"location_name": "KYK돈카스"}]}
+    out = g.revise_draft(post, "다듬기", None)
+    assert [p for p, _ in _h2_pairs(out["content"])] == [_EXPO, "KYK돈카스"]
+    assert "고친소개" in out["content"]

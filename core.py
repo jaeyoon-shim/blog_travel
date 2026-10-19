@@ -2210,6 +2210,117 @@ def splice_locked(old_html, new_html, keys):
     return "".join(out), kept
 
 
+_HDR_REVISIT = re.compile(r'\s*\(\s*재방문\s*(\d*)\s*\)\s*$')
+_HDR_MIN_SCORE = 0.6
+
+
+def _hdr_parts(s):
+    """헤더 비교용 → (괄호부기 뺀 정규형, 괄호 포함 정규형, 재방문 태그). 순수함수.
+    재방문 접미는 따로 떼어 태그로 비교한다 — 괄호 제거에 휩쓸리면 'X'와
+    'X (재방문)'이 같은 이름이 되어 섹션이 병합된다."""
+    s = re.sub(r'<[^>]+>', '', s or "").strip()
+    m = _HDR_REVISIT.search(s)
+    tag = ("재방문" + m.group(1)) if m else ""
+    if m:
+        s = s[:m.start()]
+    full = re.sub(r'[\s\W_]+', '', s).lower()
+    bare = re.sub(r'[\s\W_]+', '', re.sub(r'[(\[（【].*?[)\]）】]', '', s)).lower()
+    return bare, full, tag
+
+
+def _hdr_score(a, b):
+    """AI h2 장소명 a ↔ 계획 장소명 b 유사도(0~1). 순수함수."""
+    import difflib
+    ab, af, at = _hdr_parts(a)
+    bb, bf, bt = _hdr_parts(b)
+    if not af or not bf:
+        return 0.0
+    sc = max(difflib.SequenceMatcher(None, ab, bb).ratio() if ab and bb else 0.0,
+             difflib.SequenceMatcher(None, af, bf).ratio())
+    short, long_ = sorted((af, bf), key=len)
+    if len(short) >= 2 and short in long_:
+        sc = max(sc, 0.9)
+    if at != bt:
+        sc *= 0.5
+    return sc
+
+
+def _align_headers(h2_names, place_names):
+    """h2 이름 목록 → 계획 장소 인덱스(or None) 목록. 순서 보존(단조, 재정렬 금지).
+    개수가 같으면 인덱스 대응(섹션 순서 = 방문 순서가 프롬프트 계약) — 단, 어떤 h2가
+    다른 위치의 장소명과 정확히 같으면(AI가 순서를 바꿈) 유사도 정렬로 내려간다.
+    개수가 다르면 가중 LCS(DP)로 확신(≥_HDR_MIN_SCORE) 쌍만 대응."""
+    n, m = len(h2_names), len(place_names)
+    exact = [[_hdr_parts(h)[1:] == _hdr_parts(p)[1:] for p in place_names] for h in h2_names]
+    if n == m and not any(exact[i][j] for i in range(n) for j in range(m) if i != j):
+        return list(range(n))
+    sc = [[_hdr_score(h, p) for p in place_names] for h in h2_names]
+    dp = [[0.0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            best = max(dp[i + 1][j], dp[i][j + 1])
+            if sc[i][j] >= _HDR_MIN_SCORE:
+                best = max(best, sc[i][j] + dp[i + 1][j + 1])
+            dp[i][j] = best
+    out, i, j = [None] * n, 0, 0
+    while i < n and j < m:
+        if sc[i][j] >= _HDR_MIN_SCORE and abs(dp[i][j] - (sc[i][j] + dp[i + 1][j + 1])) < 1e-9:
+            out[i] = j
+            i += 1
+            j += 1
+        elif dp[i][j] == dp[i + 1][j]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+def canonicalize_place_headers(html, place_names):
+    """AI 본문의 장소 h2를 계획 장소명(진실원)으로 정규화 → html. 순수함수.
+    AI는 재생성마다 장소명을 훼손한다(실측: '만국박람회 기념공원(千里万博公園)' →
+    '만국박람회 기념公園'). 그러면 섹션 키(split_sections)·고정 섹션 이식
+    (splice_locked)·이름 기반 사진/별점/경로 매칭이 전부 어긋난다.
+    - data-place = 계획 이름(없으면 추가). h2 태그 밖은 한 글자도 안 바꾼다.
+    - 표시 텍스트는 이미 계획 이름을 담고 있으면(공백 차이·'(현지어)' 부기) 유지,
+      아니면 계획 이름으로 교체. 재방문 접미가 다르면 교체.
+    - 확신 대응이 없는 h2는 그대로 둔다(추측 금지)."""
+    html = html or ""
+    names = [n for n in (place_names or []) if n]
+    if not html or not names:
+        return html
+    pat = re.compile(r'<h2\b([^>]*)>(.*?)</h2>', re.I | re.S)
+    found = list(pat.finditer(html))
+    if not found:
+        return html
+    def _cur(mt):
+        dm = re.search(r'data-place="([^"]*)"', mt.group(1))
+        return (dm.group(1) if dm else re.sub(r'<[^>]+>', '', mt.group(2))).strip()
+    idx = _align_headers([_cur(mt) for mt in found], names)
+    out, prev = [], 0
+    for mt, j in zip(found, idx):
+        out.append(html[prev:mt.start()])
+        prev = mt.end()
+        canon = names[j] if j is not None else ""
+        if not canon or canon == "미확인":     # 무명 장소로 독자용 헤더를 덮지 않는다
+            out.append(mt.group(0))
+            continue
+        attr_val = canon.replace('"', '&quot;')
+        attrs = mt.group(1)
+        if re.search(r'data-place="[^"]*"', attrs):
+            attrs = re.sub(r'data-place="[^"]*"', lambda _m: f'data-place="{attr_val}"', attrs, count=1)
+        else:
+            attrs = f' data-place="{attr_val}"' + attrs
+        text = mt.group(2)
+        tp, cp = _hdr_parts(text), _hdr_parts(canon)
+        t_ws = re.sub(r'\s+', '', re.sub(r'<[^>]+>', '', text))
+        c_ws = re.sub(r'\s+', '', _HDR_REVISIT.sub('', canon))
+        if not (c_ws and c_ws in t_ws and tp[2] == cp[2]):
+            text = canon.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        out.append(f'<h2{attrs}>{text}</h2>')
+    out.append(html[prev:])
+    return "".join(out)
+
+
 def _url_count(s):
     """data URI를 걷어낸 뒤 https?:// 개수(base64 안 우연한 'http' 오탐 방지 — lessons 08-17(2) #7)."""
     s = re.sub(r'data:[a-zA-Z0-9.+/-]+;base64,[A-Za-z0-9+/=]+', '', s or "")
@@ -3089,6 +3200,10 @@ class TravelBlogGenerator:
             except Exception as e:
                 logger.error(f"❌ AI 생성 오류: {e}"); return None
             try:
+                # 장소 h2를 계획 이름으로 정규화 — 사진·경로카드·별점 삽입(_insert_photos_with_map)이
+                # h2 이름으로 섹션을 찾으므로 반드시 그 전에. 섹션 키(고정 이식)도 여기서 안정된다.
+                post["content"] = canonicalize_place_headers(
+                    post.get("content") or "", group_place_names({"photos": photos}))
                 post["content"] = self._insert_photos_with_map(post["content"], photos)
                 post["content"] = self._scrub_content(post["content"])
                 bad = [r.get("location_name", "") for r in photos
@@ -3237,6 +3352,9 @@ class TravelBlogGenerator:
         if out.count("http") > text.count("http"):
             logger.warning("⚠️ 피드백 재작성 거부: 신규 URL 유입 — 원본 유지")
             return None
+        # 전체 재작성은 h2를 잠그지 않는다 → AI가 훼손한 장소명을 계획 이름으로 되돌림
+        restored = canonicalize_place_headers(
+            restored, group_place_names({"photos": (post or {}).get("photo_results") or []}))
         new_post = dict(post)
         new_post["content"] = self._number_places(restored)
         new_post["seo_warnings"] = self.seo_check(
