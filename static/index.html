@@ -884,12 +884,27 @@ async function doPub(){const t=document.getElementById('pTitle')?.value||draftTi
 const tags=(document.getElementById('pTags')?.value||'').split(',').map(s=>s.trim()).filter(Boolean);
 const method='selenium';   // 클립보드 경로 폐기 — 항상 자동 발행
 const vis=document.getElementById('pVis')?.value||'비공개';
-show('발행 중...');await fetch(`${API}/api/publish`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t,blocks,tags,method,visibility:vis})});
+const label=groups[curGroup]?.label||((curGroup+1)+'일차');
+// 되돌리기 어려운 외부 작업 — 전체 발행과 같은 수준의 확인 + 재발행 경고
+if(publishedGis.has(curGroup)&&!confirm(`⚠️ ${label}은(는) 이미 발행했습니다.
+다시 발행하면 네이버에 같은 글이 하나 더 생깁니다.
+그래도 계속할까요?`))return;
+if(!confirm(`${label}을(를) 네이버에 발행합니다.
+
+제목: ${t||'(제목 없음)'}
+공개설정: ${vis}
+
+계속할까요? (발행은 되돌리기 어렵습니다)`))return;
+show('발행 중...');await fetch(`${API}/api/publish`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t,blocks,tags,method,visibility:vis,gi:curGroup})});
 startPoll(p=>{if(p.status==='done'){publishedGis.add(curGroup);
 const next=groups.findIndex((g,i)=>!publishedGis.has(i));
 if(next>=0&&confirm(`✅ 발행 완료!\n\n다음 일차(${groups[next]?.label||(next+1)+'일차'})를 이어서 발행할까요?`)){pubSwitch(next)}
 else{alert('✅ 발행 완료!');renderPublishStep()}}
 else if(p.status==='error')alert('❌ 발행 실패\n\n'+(p.message||'알 수 없는 오류'))})}
+
+// 전체 발행은 일부만 성공할 수 있어 서버 기록(published_gis)을 진실원으로 다시 읽는다
+async function refreshPublished(){try{const r=await fetch(`${API}/api/status`);if(!r.ok)return;const d=await r.json();
+publishedGis=new Set(d.published_gis||[]);renderPublishStep()}catch(e){}}
 
 async function doPubAll(){
   const method='selenium';   // 클립보드 경로 폐기 — 항상 자동 발행
@@ -902,7 +917,7 @@ async function doPubAll(){
     try{
       const r=await fetch(`${API}/api/blocks/${gi}/0`);
       const d=await r.json();
-      if(d.blocks && d.blocks.length) gs.push({title:d.title||('Day '+(gi+1)), blocks:d.blocks, tags:d.tags||[]});
+      if(d.blocks && d.blocks.length) gs.push({gi, title:d.title||('Day '+(gi+1)), blocks:d.blocks, tags:d.tags||[]});
       else failed.push(gi+1);
     }catch(e){failed.push(gi+1)}
   }
@@ -910,7 +925,8 @@ async function doPubAll(){
   if(failed.length && !confirm(`Day ${failed.join(', ')}의 초안을 불러오지 못해 제외됩니다.\n나머지 ${gs.length}일만 발행할까요?`))return;
   show(`전체 ${gs.length}일 발행 중...`);
   await fetch(`${API}/api/publish_all`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groups:gs,visibility:vis,method})});
-  startPoll(p=>{ if(p.status==='done')alert('✅ 전체 발행 완료!'); else if(p.status==='error')alert('❌ 전체 발행 실패\n\n'+(p.message||'알 수 없는 오류')); });
+  startPoll(p=>{ if(p.status==='done'||p.status==='error')refreshPublished();
+    if(p.status==='done')alert('✅ 전체 발행 완료!'); else if(p.status==='error')alert('❌ 전체 발행 실패\n\n'+(p.message||'알 수 없는 오류')); });
 }
 
 async function doSave(){const html=$pc.innerHTML;

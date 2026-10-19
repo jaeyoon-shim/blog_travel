@@ -10,14 +10,12 @@ import os, sys, json, re, threading, logging, time, base64
 from pathlib import Path
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
 
 from core import (Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator,
                   LocalSaver, NaverBlogAnalyzer, StyleAnalyzer, logger)
 from posters import NaverPoster, TistoryPoster, html_to_blocks, summarize_publish_results
 
 app = Flask(__name__, static_folder='static')
-CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
@@ -113,8 +111,34 @@ def load_settings():
         api["google_key"] = os.environ["GOOGLE_MAPS_API_KEY"]
 
 
-# 저장하지 않는 키 — 런타임 주입(google_key)이거나 폐기된 입력이다.
-_UNSAVED_API_KEYS = ("google_key", "naver_id", "naver_pw", "publish_method")
+# 저장하지 않는 키 — 런타임 주입(.env)이거나 폐기된 입력이다.
+_UNSAVED_API_KEYS = ("openai_key", "google_key", "naver_id", "naver_pw", "publish_method")
+# 브라우저·디스크로 내보내지 않는 키 — 시크릿은 .env에만 둔다.
+_SECRET_API_KEYS = ("openai_key", "google_key", "naver_id", "naver_pw")
+
+
+def _without_secrets(s):
+    """설정 사본에서 시크릿 키를 뺀다(응답·프로필 파일용). state 원본은 건드리지 않는다."""
+    out = json.loads(json.dumps(s or {}))
+    api = out.get("api")
+    if isinstance(api, dict):
+        for k in _SECRET_API_KEYS:
+            api.pop(k, None)
+    return out
+
+
+_PROFILE_NAME_RE = re.compile(r'[\w가-힣 -]{1,60}')
+
+
+def _profile_path(name):
+    """프로필 이름 → PROFILE_DIR 안의 파일 경로. 경로 탈출(.., 역슬래시 등)이면 None."""
+    name = (name or "").strip()
+    if not _PROFILE_NAME_RE.fullmatch(name):
+        return None
+    f = (PROFILE_DIR / f"{name}.json").resolve()
+    if f.parent != PROFILE_DIR.resolve():
+        return None
+    return f
 
 
 def migrate_settings(s):
@@ -277,7 +301,7 @@ def api_settings_post():
 
 @app.route('/api/settings/raw', methods=['GET'])
 def api_settings_raw():
-    return jsonify(state["settings"])
+    return jsonify(_without_secrets(state["settings"]))
 
 
 # ── 프로필 시스템 ──
@@ -309,22 +333,23 @@ def api_profiles():
 @app.route('/api/profiles/<name>', methods=['GET'])
 def api_profile_load(name):
     """프로필 로드"""
-    f = PROFILE_DIR / f"{name}.json"
+    f = _profile_path(name)
+    if f is None:
+        return jsonify({"error": "잘못된 이름"}), 400
     if not f.exists():
         return jsonify({"error": "프로필 없음"}), 404
     with open(f, 'r', encoding='utf-8') as fp:
         data = json.load(fp)
-    # .env 우선 적용
-    api = data.get("api", {})
+    # 옛 프로필 파일에 평문으로 남은 키는 무시하고 .env를 우선 적용(state에만).
+    # 응답에는 시크릿을 싣지 않는다 — 브라우저로 키 원문이 내려가던 문제.
+    data = _without_secrets(data)
+    api = data.setdefault("api", {})
     if os.environ.get("OPENAI_API_KEY"): api["openai_key"] = os.environ["OPENAI_API_KEY"]
     if os.environ.get("GOOGLE_MAPS_API_KEY"): api["google_key"] = os.environ["GOOGLE_MAPS_API_KEY"]
-    if os.environ.get("NAVER_USERNAME"): api["naver_id"] = os.environ["NAVER_USERNAME"]
-    if os.environ.get("NAVER_PASSWORD"): api["naver_pw"] = os.environ["NAVER_PASSWORD"]
-    data["api"] = api
     state["settings"] = data
-    LAST_PROFILE.write_text(name, encoding='utf-8')
+    LAST_PROFILE.write_text(name.strip(), encoding='utf-8')
     logger.info(f"프로필 로드: {name}")
-    return jsonify(data)
+    return jsonify(_without_secrets(data))
 
 
 @app.route('/api/profiles/save', methods=['POST'])
@@ -339,11 +364,17 @@ def api_profile_save():
     if not safe_name:
         return jsonify({"error": "잘못된 이름"}), 400
 
-    profile_data = data.get("settings", {})
-    f = PROFILE_DIR / f"{safe_name}.json"
+    f = _profile_path(safe_name)
+    if f is None:
+        return jsonify({"error": "잘못된 이름"}), 400
+    profile_data = _without_secrets(data.get("settings", {}))
     with open(f, 'w', encoding='utf-8') as fp:
         json.dump(profile_data, fp, ensure_ascii=False, indent=2)
 
+    # state에는 .env 시크릿을 다시 주입(무료모드 판정 등 런타임용)
+    api = profile_data.setdefault("api", {})
+    if os.environ.get("OPENAI_API_KEY"): api["openai_key"] = os.environ["OPENAI_API_KEY"]
+    if os.environ.get("GOOGLE_MAPS_API_KEY"): api["google_key"] = os.environ["GOOGLE_MAPS_API_KEY"]
     state["settings"] = profile_data
     LAST_PROFILE.write_text(safe_name, encoding='utf-8')
     save_settings()  # settings.json도 동기화
@@ -354,7 +385,9 @@ def api_profile_save():
 @app.route('/api/profiles/<name>', methods=['DELETE'])
 def api_profile_delete(name):
     """프로필 삭제"""
-    f = PROFILE_DIR / f"{name}.json"
+    f = _profile_path(name)
+    if f is None:
+        return jsonify({"error": "잘못된 이름"}), 400
     if f.exists():
         f.unlink()
         logger.info(f"프로필 삭제: {name}")
@@ -1244,9 +1277,10 @@ def api_publish_all():
                 time.sleep(5)  # 스팸 방지
             # 실패를 무시하고 "완료"로 보고하던 버그 수정 — 결과 기반 요약
             status, msg = summarize_publish_results(results, titles)
-            for _i, _r in enumerate(results):
-                if (_r or {}).get("success"):
-                    state["published_gis"].add(_i)
+            for gd, _r in zip(group_data, results):
+                # 프론트가 실패 일차를 빼고 보내므로 배열 순번이 아니라 실어 보낸 gi로 기록
+                if (_r or {}).get("success") and gd.get("gi") is not None:
+                    state["published_gis"].add(int(gd["gi"]))
             _save_project()
             state["progress"] = {"status":status,"message":msg,
                                  "percent":100 if status=="done" else 0}
@@ -1300,4 +1334,7 @@ if __name__ == '__main__':
     print("  TravelBlog Pro v10.0 — Web Edition (Final)")
     print("  http://localhost:5000")
     print("="*50 + "\n")
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    # 로컬 전용 — 0.0.0.0이면 같은 LAN 누구나 발행·설정·사진에 접근(인증 없음).
+    # 디버거는 원격 코드 실행 표면이라 명시적으로 켤 때만(FLASK_DEBUG=1).
+    app.run(host='127.0.0.1', port=5000,
+            debug=os.environ.get("FLASK_DEBUG") == "1", use_reloader=False)

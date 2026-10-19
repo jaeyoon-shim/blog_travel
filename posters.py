@@ -1235,6 +1235,27 @@ class NaverSeleniumPoster(_SeleniumBase):
         """, target)
         logger.info(f"  공개 설정 ({target}): {result}")
         time.sleep(0.5)
+        # 클릭 결과를 다시 읽어 검증 — 못 찾거나 다른 옵션이 눌렸으면 네이버 기본값
+        # (공개일 수 있음)으로 나가므로 발행을 중단한다(안전 기본값 원칙).
+        checked = self.driver.execute_script("""
+            var radios = document.querySelectorAll('input[type="radio"]:checked');
+            var out = [];
+            for (var i = 0; i < radios.length; i++) {
+                var r = radios[i];
+                var label = (r.id && document.querySelector('label[for="' + r.id + '"]'))
+                            || r.closest('label') || r.parentElement;
+                if (label) out.push(label.textContent.trim());
+            }
+            return out;
+        """)
+        if not self._visibility_confirmed(target, checked):
+            raise RuntimeError(f"공개설정 '{target}' 적용 확인 실패(선택됨: {checked}) — 발행 중단")
+
+    @staticmethod
+    def _visibility_confirmed(target, checked_labels):
+        """선택된 라디오 라벨 중 목표 공개설정과 정확히 일치하는 것이 있는가.
+        부분일치는 쓰지 않는다('이웃공개' ⊂ '서로이웃공개' 오판 방지)."""
+        return any((t or "").strip() == target for t in (checked_labels or []))
 
     def _input_tags_in_dialog(self, tags):
         from selenium.webdriver.common.keys import Keys

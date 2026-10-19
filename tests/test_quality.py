@@ -1791,6 +1791,113 @@ def test_save_settings_never_writes_credentials(tmp_path, monkeypatch):
     })
     A.save_settings()
     saved = json.loads(f.read_text(encoding="utf-8"))
-    for k in ("google_key", "naver_id", "naver_pw", "publish_method"):
-        assert k not in saved["api"], k          # 런타임/폐기 키는 파일에 안 남는다
-    assert saved["api"]["openai_key"] == "sk-1"  # 필요한 건 남는다
+    for k in ("openai_key", "google_key", "naver_id", "naver_pw", "publish_method"):
+        assert k not in saved["api"], k          # 시크릿/폐기 키는 파일에 안 남는다(엔진은 .env만 읽음)
+    assert saved["api"]["default_visibility"] == "비공개"  # 일반 설정은 남는다
+
+
+# ── 2026-10-19 종합점검 즉시조치: 보안·발행 안전 ──
+def _sync_threads(monkeypatch, app_mod):
+    """라우트의 백그라운드 스레드를 동기 실행으로 바꿔 결과를 바로 assert."""
+    import types
+    class _T:
+        def __init__(self, target=None, daemon=None, **kw): self._t = target
+        def start(self): self._t()
+    monkeypatch.setattr(app_mod, "threading", types.SimpleNamespace(Thread=_T))
+
+
+def test_profile_path_rejects_traversal(monkeypatch, tmp_path):
+    import app as app_mod
+    monkeypatch.setattr(app_mod, "PROFILE_DIR", tmp_path / "profiles")
+    (tmp_path / "profiles").mkdir()
+    assert app_mod._profile_path(r"..\settings") is None
+    assert app_mod._profile_path("../settings") is None
+    assert app_mod._profile_path("..") is None
+    assert app_mod._profile_path("") is None
+    assert app_mod._profile_path("내 블로그-1").name == "내 블로그-1.json"
+
+
+def test_profile_delete_cannot_escape_dir(monkeypatch, tmp_path):
+    """DELETE /api/profiles/..%5Cvictim 이 프로필 폴더 밖 .json(plan 등)을 지우지 못한다."""
+    import app as app_mod
+    (tmp_path / "profiles").mkdir()
+    monkeypatch.setattr(app_mod, "PROFILE_DIR", tmp_path / "profiles")
+    victim = tmp_path / "victim.json"; victim.write_text("{}", encoding="utf-8")
+    c = app_mod.app.test_client()
+    assert c.delete('/api/profiles/..%5Cvictim').status_code == 400
+    assert c.get('/api/profiles/..%5Cvictim').status_code == 400
+    assert victim.exists()
+
+
+def test_settings_responses_never_carry_secrets(monkeypatch, tmp_path):
+    """키 원문이 브라우저(응답)나 프로필 파일로 나가지 않는다. state에는 .env 키가 남는다."""
+    import app as app_mod
+    (tmp_path / "profiles").mkdir()
+    monkeypatch.setattr(app_mod, "PROFILE_DIR", tmp_path / "profiles")
+    monkeypatch.setattr(app_mod, "LAST_PROFILE", tmp_path / "last.txt")
+    monkeypatch.setattr(app_mod, "SETTINGS_FILE", tmp_path / "settings.json")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-secret")
+    monkeypatch.setitem(app_mod.state, "settings",
+                        {"api": {"openai_key": "sk-env-secret", "default_visibility": "비공개"}})
+    c = app_mod.app.test_client()
+    assert "sk-env-secret" not in c.get('/api/settings/raw').get_data(as_text=True)
+
+    r = c.post('/api/profiles/save', json={"profile_name": "테스트",
+               "settings": {"api": {"openai_key": "sk-typed-secret", "naver_pw": "pw"}}})
+    assert r.status_code == 200
+    saved = (tmp_path / "profiles" / "테스트.json").read_text(encoding="utf-8")
+    assert "sk-typed-secret" not in saved and '"pw"' not in saved
+    assert "sk-env-secret" not in (tmp_path / "settings.json").read_text(encoding="utf-8")
+
+    # 옛 프로필 파일에 평문 키가 남아 있어도 응답엔 안 실린다
+    (tmp_path / "profiles" / "옛.json").write_text(
+        '{"api": {"openai_key": "sk-old-plain", "naver_pw": "oldpw"}}', encoding="utf-8")
+    body = c.get('/api/profiles/%EC%98%9B').get_data(as_text=True)
+    assert "sk-old-plain" not in body and "oldpw" not in body and "sk-env-secret" not in body
+    assert app_mod.state["settings"]["api"]["openai_key"] == "sk-env-secret"
+
+
+def test_publish_all_records_real_gi(monkeypatch):
+    """실패 일차를 빼고 보낸 전체 발행은 배열 순번이 아니라 실제 gi로 발행 기록을 남긴다."""
+    import app as app_mod
+    class _Stub:
+        def __init__(self, *a, **k): pass
+        def post(self, data, **k): return {"success": data["title"] != "실패", "url": ""}
+        def close(self): pass
+    monkeypatch.setattr(app_mod, "NaverPoster", _Stub)
+    monkeypatch.setattr(app_mod, "_save_project", lambda: None)
+    monkeypatch.setattr(app_mod.time, "sleep", lambda s: None)
+    _sync_threads(monkeypatch, app_mod)
+    monkeypatch.setitem(app_mod.state, "published_gis", set())
+    c = app_mod.app.test_client()
+    r = c.post('/api/publish_all', json={"visibility": "비공개", "groups": [
+        {"gi": 1, "title": "2일차", "blocks": [], "tags": []},
+        {"gi": 3, "title": "실패", "blocks": [], "tags": []},
+        {"gi": 2, "title": "3일차", "blocks": [], "tags": []}]})
+    assert r.status_code == 200
+    assert app_mod.state["published_gis"] == {1, 2}
+
+
+def test_single_publish_records_gi(monkeypatch):
+    import app as app_mod
+    class _Stub:
+        def __init__(self, *a, **k): pass
+        def post(self, data, **k): return {"success": True, "url": "u"}
+        def close(self): pass
+    monkeypatch.setattr(app_mod, "NaverPoster", _Stub)
+    monkeypatch.setattr(app_mod, "_save_project", lambda: None)
+    _sync_threads(monkeypatch, app_mod)
+    monkeypatch.setitem(app_mod.state, "published_gis", set())
+    c = app_mod.app.test_client()
+    c.post('/api/publish', json={"title": "t", "blocks": [], "visibility": "비공개", "gi": 2})
+    assert app_mod.state["published_gis"] == {2}
+
+
+def test_visibility_confirmed_exact_match_only():
+    from posters import NaverSeleniumPoster as P
+    assert P._visibility_confirmed("비공개", ["비공개"])
+    assert P._visibility_confirmed("비공개", ["댓글 허용", " 비공개 "])
+    assert not P._visibility_confirmed("비공개", ["전체공개"])
+    assert not P._visibility_confirmed("서로이웃공개", ["이웃공개"])   # 부분일치 오판 금지
+    assert not P._visibility_confirmed("비공개", [])
+    assert not P._visibility_confirmed("비공개", None)
