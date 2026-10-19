@@ -2009,6 +2009,108 @@ def brief_prompt_block(brief):
             + "\n".join(lines) + "\n" + tail)
 
 
+OUTLINE_LENGTHS = ("짧게", "보통", "길게")
+_LENGTH_RULE = {"짧게": "짧게(소개 2문장 내외, 사진 설명 1줄)", "보통": "보통",
+                "길게": "길게(다른 섹션보다 자세히)"}
+
+
+def group_place_names(group):
+    """그룹 사진의 장소명(재방문 접미 포함)을 첫 등장 순서로 — _build_prompt의
+    [방문 장소 목록]·h2 data-place와 같은 규칙(빈 이름은 '미확인')."""
+    names = []
+    for p in (group or {}).get("photos", []):
+        loc = p.get("location_name", "") or "미확인"
+        if loc not in names:
+            names.append(loc)
+    return names
+
+
+def normalize_outline(raw, place_names, keyword=""):
+    """AI/사용자 목차 → 정규 목차. 섹션은 place_names 순서·이름으로 강제
+    (누락 = 빈 요지, 미지 장소 = 버림), length∈OUTLINE_LENGTHS, 제목 후보 ≤3(중복 제거),
+    문자열 길이 상한. keyword(지역명)가 있으면 후보별 has_keyword 계산."""
+    raw = raw if isinstance(raw, dict) else {}
+    kw = (keyword or "").strip()
+    cands = []
+    for c in raw.get("title_candidates") or []:
+        t = _clip(c.get("title") if isinstance(c, dict) else c, 60)
+        if t and t not in [x["title"] for x in cands]:
+            cands.append({"title": t, "has_keyword": bool(kw) and kw in t})
+        if len(cands) >= 3:
+            break
+    by_place = {}
+    for s in raw.get("sections") or []:
+        if not isinstance(s, dict):
+            continue
+        p = _clip(s.get("place"), 120)
+        if p in place_names and p not in by_place:
+            by_place[p] = s
+    sections = []
+    for name in place_names:
+        s = by_place.get(name, {})
+        ln = _clip(s.get("length"), 4)
+        sections.append({"place": name,
+                         "gist": _clip(s.get("gist"), 200),
+                         "emphasis": _clip(s.get("emphasis"), 200),
+                         "length": ln if ln in OUTLINE_LENGTHS else "보통"})
+    tips_raw = raw.get("tips") or []
+    if isinstance(tips_raw, str):
+        tips_raw = tips_raw.split("\n")
+    tips = [t for t in (_clip(x, 150) for x in tips_raw) if t][:5]
+    bu = raw.get("brief_used")
+    return {"title_candidates": cands, "title": _clip(raw.get("title"), 80),
+            "intro_hook": _clip(raw.get("intro_hook"), 300), "sections": sections,
+            "tips": tips, "outro": _clip(raw.get("outro"), 200),
+            "approved": bool(raw.get("approved")),
+            "brief_used": dict(bu) if isinstance(bu, dict) else {}}
+
+
+def outline_prompt_block(outline):
+    """승인 목차 → `[승인된 목차 — 반드시 따름]` 조각. 목차가 없으면 ""."""
+    if not isinstance(outline, dict) or not outline.get("sections"):
+        return ""
+    lines = ["", "[승인된 목차 — 반드시 따름. 글쓴이가 검토·확정한 글 설계입니다]"]
+    if outline.get("intro_hook"):
+        lines.append(f"- 인트로 첫 문단 방향: {outline['intro_hook']}")
+    lines.append("- 장소 섹션(순서·이름 변경 금지):")
+    for i, s in enumerate(outline["sections"], 1):
+        bits = []
+        if s.get("gist"):
+            bits.append(f"요지: {s['gist']}")
+        if s.get("emphasis"):
+            bits.append(f"강조: {s['emphasis']}")
+        ln = s.get("length") or "보통"
+        if ln != "보통":
+            bits.append(f"분량: {_LENGTH_RULE.get(ln, ln)}")
+        lines.append(f"  {i}. {s.get('place', '')}" + (" — " + " / ".join(bits) if bits else ""))
+    if outline.get("tips"):
+        lines.append("- 꿀팁 영역에 반드시 담을 내용: " + " / ".join(outline["tips"]))
+    if outline.get("outro"):
+        lines.append(f"- 아웃트로 방향: {outline['outro']}")
+    return "\n".join(lines) + "\n"
+
+
+def outline_section_hint(outline, key):
+    """섹션 재작성용 — 해당 섹션의 승인 목차 요지만 조각으로. 없으면 ""."""
+    if not isinstance(outline, dict):
+        return ""
+    if key == "__intro__":
+        body = outline.get("intro_hook") or ""
+    elif key == "__tips__":
+        parts = list(outline.get("tips") or [])
+        if outline.get("outro"):
+            parts.append("마무리: " + outline["outro"])
+        body = " / ".join(parts)
+    else:
+        sec = next((s for s in outline.get("sections") or [] if s.get("place") == key), None)
+        body = ""
+        if sec:
+            bits = [f"요지: {sec['gist']}" if sec.get("gist") else "",
+                    f"강조: {sec['emphasis']}" if sec.get("emphasis") else ""]
+            body = " / ".join(b for b in bits if b)
+    return f"[이 섹션의 승인된 목차]\n{body}\n" if body else ""
+
+
 # ============================================================
 # 여행 블로그 글 생성기 v2
 # ============================================================

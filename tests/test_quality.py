@@ -1929,3 +1929,62 @@ def test_brief_prompt_block_empty_and_braces():
     assert "[글 기획 — 반드시 따름" in b
     assert "중괄호 {테스트} }{" in b
     assert "쓰지 말 것" in b
+
+
+def test_normalize_outline_order_and_caps():
+    from core import normalize_outline
+    names = ["연화의탕", "이자카야", "연화의탕 (재방문)"]
+    raw = {
+        "title_candidates": ["벳푸 온천 여행 1일차", {"title": "느긋한 효도 여행"},
+                             "벳푸 온천 여행 1일차", "후보4", "후보5"],
+        "title": "",
+        "intro_hook": "x" * 500,
+        "sections": [
+            {"place": "연화의탕 (재방문)", "gist": "밤 온천", "length": "길게"},
+            {"place": "없는장소", "gist": "버려야 함"},
+            {"place": "연화의탕", "gist": "아침 온천", "emphasis": "계단", "length": "아주길게"},
+        ],
+        "tips": "팁1\n\n팁2\n팁3\n팁4\n팁5\n팁6",
+        "outro": "마무리",
+    }
+    o = normalize_outline(raw, names, keyword="벳푸")
+    assert [s["place"] for s in o["sections"]] == names                 # 그룹 순서·이름 강제
+    assert o["sections"][0]["gist"] == "아침 온천" and o["sections"][0]["length"] == "보통"
+    assert o["sections"][1]["gist"] == "" and o["sections"][1]["length"] == "보통"   # 누락 → 빈 요지
+    assert o["sections"][2]["length"] == "길게"
+    assert [c["title"] for c in o["title_candidates"]] == [
+        "벳푸 온천 여행 1일차", "느긋한 효도 여행", "후보4"]                # 중복 제거·≤3
+    assert o["title_candidates"][0]["has_keyword"] is True
+    assert o["title_candidates"][1]["has_keyword"] is False
+    assert len(o["intro_hook"]) == 300
+    assert o["tips"] == ["팁1", "팁2", "팁3", "팁4", "팁5"]
+    assert o["approved"] is False and o["brief_used"] == {}
+    assert normalize_outline(None, ["A"])["sections"] == [
+        {"place": "A", "gist": "", "emphasis": "", "length": "보통"}]
+
+
+def test_outline_prompt_block_and_section_hint():
+    from core import normalize_outline, outline_prompt_block, outline_section_hint
+    o = normalize_outline({"intro_hook": "부모님과 {첫} 온천", "sections": [
+        {"place": "연화의탕", "gist": "아침 온천", "emphasis": "계단 없음", "length": "길게"},
+        {"place": "이자카야", "gist": "", "length": "보통"}],
+        "tips": ["예약 필수"], "outro": "다음엔 겨울에"}, ["연화의탕", "이자카야"])
+    b = outline_prompt_block(o)
+    assert "[승인된 목차 — 반드시 따름" in b
+    assert "부모님과 {첫} 온천" in b
+    assert "1. 연화의탕 — 요지: 아침 온천 / 강조: 계단 없음 / 분량: 길게" in b
+    assert "2. 이자카야" in b and "예약 필수" in b and "다음엔 겨울에" in b
+    assert outline_prompt_block(None) == "" and outline_prompt_block({}) == ""
+    assert "아침 온천" in outline_section_hint(o, "연화의탕")
+    assert "부모님과" in outline_section_hint(o, "__intro__")
+    assert "예약 필수" in outline_section_hint(o, "__tips__")
+    assert outline_section_hint(o, "이자카야") == ""
+    assert outline_section_hint(None, "연화의탕") == ""
+
+
+def test_group_place_names_matches_prompt_order():
+    from core import group_place_names
+    g = {"photos": [{"location_name": "B"}, {"location_name": "A"},
+                    {"location_name": "B"}, {"location_name": ""}]}
+    assert group_place_names(g) == ["B", "A", "미확인"]   # _build_prompt place_photos 규칙과 동일
+    assert group_place_names({}) == []
