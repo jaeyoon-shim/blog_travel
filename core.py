@@ -1964,6 +1964,52 @@ class ReceiptReader:
 
 
 # ============================================================
+# 사람 참여 기획 — 브리프·목차·섹션 (순수함수, 네트워크 X)
+# 설계: docs/superpowers/specs/2026-10-19-사람참여-기획-보정-design.md
+# ⚠ 사용자 텍스트는 여기서 "완성된 문자열"로 만들어 프롬프트 f-string에
+#   변수로만 꽂는다. 템플릿에 { } 리터럴을 추가하지 않는다(중괄호 지뢰).
+# ============================================================
+TRIP_BRIEF_KEYS = ("concept", "reader", "message", "must_include", "avoid")
+DAY_BRIEF_KEYS = ("message", "must_include", "avoid")
+BRIEF_LABELS = {"concept": "글 컨셉", "reader": "예상 독자", "message": "핵심 메시지",
+                "must_include": "꼭 넣을 것", "avoid": "쓰지 말 것"}
+
+
+def _clip(v, n):
+    """문자열 정규화 — None/비문자열 안전, 양끝 공백 제거, n자 상한. 순수함수."""
+    s = v if isinstance(v, str) else ("" if v is None else str(v))
+    return s.strip()[:n]
+
+
+def normalize_brief(d, keys=TRIP_BRIEF_KEYS):
+    """브리프 dict → keys만 남긴 문자열 dict(빈 문자열 = 미지정, 500자 상한)."""
+    d = d if isinstance(d, dict) else {}
+    return {k: _clip(d.get(k), 500) for k in keys}
+
+
+def merge_brief(trip_brief, day_brief=None):
+    """여행 공통 브리프 + 일차 보충 → 병합. 일차 칸이 비면 공통 값 상속.
+    일차 브리프는 DAY_BRIEF_KEYS만 덮을 수 있다(컨셉·독자는 여행 단위)."""
+    out = normalize_brief(trip_brief, TRIP_BRIEF_KEYS)
+    day = normalize_brief(day_brief, DAY_BRIEF_KEYS)
+    for k in DAY_BRIEF_KEYS:
+        if day[k]:
+            out[k] = day[k]
+    return out
+
+
+def brief_prompt_block(brief):
+    """병합 브리프 → `[글 기획 — 반드시 따름]` 프롬프트 조각. 빈 브리프면 ""."""
+    b = normalize_brief(brief, TRIP_BRIEF_KEYS)
+    lines = [f"  - {BRIEF_LABELS[k]}: {b[k]}" for k in TRIP_BRIEF_KEYS if b[k]]
+    if not lines:
+        return ""
+    tail = "  ('쓰지 말 것'은 제목·본문 어디에도 쓰지 마세요)\n" if b["avoid"] else ""
+    return ("\n[글 기획 — 반드시 따름. 글쓴이가 직접 정한 이 글의 방향입니다]\n"
+            + "\n".join(lines) + "\n" + tail)
+
+
+# ============================================================
 # 여행 블로그 글 생성기 v2
 # ============================================================
 class TravelBlogGenerator:

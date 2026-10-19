@@ -1901,3 +1901,31 @@ def test_visibility_confirmed_exact_match_only():
     assert not P._visibility_confirmed("서로이웃공개", ["이웃공개"])   # 부분일치 오판 금지
     assert not P._visibility_confirmed("비공개", [])
     assert not P._visibility_confirmed("비공개", None)
+
+
+# ── 2026-10-19 사람 참여 기획·중간 보정 ──
+def test_merge_brief_inherits_and_overrides():
+    from core import merge_brief, normalize_brief
+    trip = {"concept": "효도 온천 여행", "reader": "30대", "message": "느긋함이 핵심",
+            "must_include": "계단 정보", "avoid": "과장"}
+    day = {"message": "", "must_include": "대기 시간", "avoid": "  "}
+    m = merge_brief(trip, day)
+    assert m["message"] == "느긋함이 핵심"          # 빈칸 → 공통 상속
+    assert m["must_include"] == "대기 시간"          # 일차 값 우선
+    assert m["avoid"] == "과장"                      # 공백만 = 빈칸
+    assert m["concept"] == "효도 온천 여행"
+    assert merge_brief(None, None) == {k: "" for k in
+                                       ("concept", "reader", "message", "must_include", "avoid")}
+    m2 = merge_brief({}, {"concept": "무시돼야 함", "message": "일차 메시지"})
+    assert m2["concept"] == "" and m2["message"] == "일차 메시지"   # 일차는 3칸만 덮는다
+    assert len(normalize_brief({"concept": "가" * 900})["concept"]) == 500
+
+
+def test_brief_prompt_block_empty_and_braces():
+    from core import brief_prompt_block
+    assert brief_prompt_block(None) == ""
+    assert brief_prompt_block({"concept": "  ", "avoid": ""}) == ""
+    b = brief_prompt_block({"concept": "중괄호 {테스트} }{", "avoid": "과장"})
+    assert "[글 기획 — 반드시 따름" in b
+    assert "중괄호 {테스트} }{" in b
+    assert "쓰지 말 것" in b
