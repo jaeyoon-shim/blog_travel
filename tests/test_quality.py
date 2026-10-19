@@ -1988,3 +1988,63 @@ def test_group_place_names_matches_prompt_order():
                     {"location_name": "B"}, {"location_name": ""}]}
     assert group_place_names(g) == ["B", "A", "미확인"]   # _build_prompt place_photos 규칙과 동일
     assert group_place_names({}) == []
+
+
+# 생성 결과와 같은 정형 마크업(헤더 div·figure data-files·경로카드·TIPS·아웃트로) 축약본
+_SEC_HDR = '<div style="text-align:center;padding:30px 0 15px">'
+_SEC_HTML = (
+    '<div style="background:#f7f8f3;border:1px solid #e3e7d8">위키</div>\n'
+    '<div style="text-align:center;padding:20px 0"><p>✈ 벳푸 여행기 ✈</p><p>인트로 글</p></div>\n'
+    f'{_SEC_HDR}\n<p>PLACE 1</p>\n<h2 data-place="연화의탕" style="font-size:1.3em">연화의탕 (蓮華の湯)</h2>\n<p>⭐ 4</p>\n</div>\n'
+    '<p>소개1</p><figure style="text-align:center;margin:24px 0" data-files="a.jpg|b.jpg"><img src="data:image/jpeg;base64,QUFB" alt="연화의탕"/></figure>\n'
+    '<div style="background:linear-gradient(135deg,#eef6ff,#f0f4ff)"><div>🚌 이동 연화의탕 → 이자카야</div></div>\n'
+    f'{_SEC_HDR}\n<p>PLACE 2</p>\n<h2 data-place="이자카야">이자카야</h2>\n</div>\n'
+    '<p>소개2</p><figure data-files="c.jpg"><img src="data:image/jpeg;base64,QkJC"/></figure>\n'
+    f'{_SEC_HDR}\n<p>PLACE 3</p>\n<h2 data-place="연화의탕 (재방문)">연화의탕 (재방문)</h2>\n</div>\n'
+    '<p>소개3</p><figure data-files="d.jpg"><img src="data:image/jpeg;base64,Q0ND"/></figure>\n'
+    '<p style="text-align:center;color:#d4d4d4;letter-spacing:8px">─ ─ ─</p>\n'
+    '<div style="text-align:center;padding:20px 0">\n<p style="font-size:0.8em">TRAVEL TIPS</p>\n'
+    '<h3>🧳 여행 꿀팁!</h3>\n</div>\n<div><p>✔ 팁</p></div>\n'
+    '<div style="text-align:center;padding:20px 0"><p>마무리</p><p>✈ 다음 여행기에서 또 만나요 ✈</p></div>'
+)
+
+
+def test_split_sections_roundtrip_and_revisit_keys():
+    from core import split_sections, section_files
+    secs = split_sections(_SEC_HTML)
+    assert [k for k, _ in secs] == ["__intro__", "연화의탕", "이자카야", "연화의탕 (재방문)", "__tips__"]
+    assert "".join(c for _, c in secs) == _SEC_HTML                       # 무손실
+    d = dict(secs)
+    assert "위키" in d["__intro__"] and "인트로 글" in d["__intro__"]
+    assert d["연화의탕"].startswith(_SEC_HDR)                              # 헤더 div에서 시작
+    assert "이동 연화의탕 → 이자카야" in d["연화의탕"]                      # 경로카드 = 직전 섹션 꼬리
+    assert "TRAVEL TIPS" in d["__tips__"] and "다음 여행기에서" in d["__tips__"]
+    assert section_files(d["연화의탕"]) == ["a.jpg", "b.jpg"]
+    assert split_sections("") == [("__intro__", "")]
+    dup = split_sections('<h2 data-place="X">X</h2><p>1</p><h2 data-place="X">X</h2><p>2</p>')
+    assert [k for k, _ in dup] == ["__intro__", "X", "X #2"]
+
+
+def test_replace_section_only_target():
+    from core import split_sections, replace_section
+    new_chunk = dict(split_sections(_SEC_HTML))["이자카야"].replace("소개2", "새 소개2")
+    out = replace_section(_SEC_HTML, "이자카야", new_chunk)
+    assert "새 소개2" in out and out.count("소개1") == 1 and "소개3" in out
+    assert replace_section(_SEC_HTML, "없는키", "x") is None
+    assert replace_section(_SEC_HTML, "__intro__", dict(split_sections(_SEC_HTML))["__intro__"]) == _SEC_HTML
+
+
+def test_splice_locked_preserves_and_skips():
+    from core import split_sections, splice_locked
+    new_html = (_SEC_HTML.replace("소개1", "새 소개1").replace("소개2", "새 소개2")
+                .replace("인트로 글", "새 인트로"))
+    out, kept = splice_locked(_SEC_HTML, new_html, ["연화의탕", "없는키"])
+    assert kept == ["연화의탕"]                                           # 없는 키 무시
+    d_out, d_old = dict(split_sections(out)), dict(split_sections(_SEC_HTML))
+    assert d_out["연화의탕"] == d_old["연화의탕"]                          # 바이트 동일
+    assert "새 소개2" in out and "새 인트로" in out                        # 나머지는 새 초안
+    moved = new_html.replace('data-files="c.jpg"', 'data-files="c.jpg|e.jpg"')
+    out2, kept2 = splice_locked(_SEC_HTML, moved, ["이자카야"])
+    assert kept2 == [] and out2 == moved                                   # 사진 구성 바뀜 → 이식 안 함
+    out3, kept3 = splice_locked(_SEC_HTML, new_html, [])
+    assert out3 == new_html and kept3 == []

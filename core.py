@@ -2111,6 +2111,96 @@ def outline_section_hint(outline, key):
     return f"[이 섹션의 승인된 목차]\n{body}\n" if body else ""
 
 
+# 장소 헤더 div — 생성 프롬프트가 조립하는 정형 마크업(TravelBlogGenerator.
+# _SECTION_HEADER_DIV와 같은 문자열). 섹션 경계는 이 div 시작이다.
+_SECTION_HDR = '<div style="text-align:center;padding:30px 0 15px">'
+_TAIL_MARKERS = ("TRAVEL TIPS", "여행 꿀팁", "다음 여행기에서")
+
+
+def split_sections(html):
+    """초안 HTML → [(key, chunk)] — "".join(chunk) == html (무손실).
+    key: "__intro__"(첫 h2 앞: 위키박스·인트로·코스요약), h2 data-place 값
+    (없으면 h2 텍스트, 중복이면 " #2"), "__tips__"(마지막 h2 뒤 꿀팁/아웃트로).
+    장소 섹션은 h2를 감싸는 헤더 div(400자 창 rfind)에서 시작 → 경로 카드는
+    직전 섹션 꼬리에 속한다(_insert_route_guides가 목적지 헤더 div 앞에 꽂음)."""
+    html = html or ""
+    starts, seen, last_h2_end = [], {}, 0
+    for m in re.finditer(r'<h2\b([^>]*)>(.*?)</h2>', html, re.I | re.S):
+        dm = re.search(r'data-place="([^"]*)"', m.group(1))
+        key = (dm.group(1) if dm else re.sub(r'<[^>]+>', '', m.group(2))).strip() or "미확인"
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] > 1:
+            key = f"{key} #{seen[key]}"
+        pos = m.start()
+        win = max(0, pos - 400)
+        di = html[win:pos].rfind(_SECTION_HDR)
+        if di >= 0:
+            pos = win + di
+        if starts and pos <= starts[-1][0]:
+            pos = m.start()
+        starts.append((pos, key))
+        last_h2_end = m.end()
+    tail = None
+    for mk in _TAIL_MARKERS:
+        mi = html.find(mk, last_h2_end)
+        if mi >= 0 and (tail is None or mi < tail):
+            tail = mi
+    if tail is not None:
+        # 텍스트 마커는 래퍼 div 안쪽이다 → 래퍼 여는 태그로 되짚는다(lessons 07-06 #3)
+        win = max(last_h2_end, tail - 400)
+        di = html[win:tail].rfind('<div')
+        if di >= 0:
+            tail = win + di
+    bounds = [(0, "__intro__")] + starts
+    if tail is not None:
+        bounds.append((tail, "__tips__"))
+    out = []
+    for i, (pos, key) in enumerate(bounds):
+        end = bounds[i + 1][0] if i + 1 < len(bounds) else len(html)
+        out.append((key, html[pos:end]))
+    return out
+
+
+def replace_section(html, key, new_chunk):
+    """key 섹션만 new_chunk로 교체. key가 없으면 None(호출부가 실패 처리)."""
+    secs = split_sections(html)
+    if key not in [k for k, _ in secs]:
+        return None
+    return "".join(new_chunk if k == key else c for k, c in secs)
+
+
+def section_files(chunk):
+    """섹션 안 figure data-files의 원본 파일명 시퀀스(순서 유지)."""
+    out = []
+    for v in re.findall(r'data-files="([^"]*)"', chunk or ""):
+        out.extend(f for f in v.split("|") if f)
+    return out
+
+
+def splice_locked(old_html, new_html, keys):
+    """고정 섹션(keys)을 old_html에서 new_html로 이식 → (html, 실제 이식된 키 목록).
+    새 HTML에 키가 없거나, 섹션의 사진 구성(data-files 시퀀스)이 달라졌으면
+    이식하지 않는다 — 옛 사진을 되붙이면 '방문 순서 = 사진 순서' 불변식이 깨진다."""
+    old = dict(split_sections(old_html))
+    kept, out = [], []
+    for k, chunk in split_sections(new_html):
+        if k in (keys or []) and k in old and section_files(old[k]) == section_files(chunk):
+            out.append(old[k])
+            kept.append(k)
+        else:
+            out.append(chunk)
+    for k in keys or []:
+        if k not in kept:
+            logger.warning(f"⚠️ 고정 섹션 이식 생략: {k} (새 초안에 없거나 사진 구성이 바뀜)")
+    return "".join(out), kept
+
+
+def _url_count(s):
+    """data URI를 걷어낸 뒤 https?:// 개수(base64 안 우연한 'http' 오탐 방지 — lessons 08-17(2) #7)."""
+    s = re.sub(r'data:[a-zA-Z0-9.+/-]+;base64,[A-Za-z0-9+/=]+', '', s or "")
+    return len(re.findall(r'https?://', s))
+
+
 # ============================================================
 # 여행 블로그 글 생성기 v2
 # ============================================================
