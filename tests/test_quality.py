@@ -2116,3 +2116,104 @@ def test_brief_post_with_plan_writes_plan(monkeypatch, tmp_path):
     assert r.get_json()["source"] == "plan"
     assert json.loads((tmp_path / "plan.json").read_text(encoding="utf-8"))["brief"]["reader"] == "30대 부부"
     assert app_mod.state["pending_brief"] is None
+
+
+def test_build_prompt_injects_brief_and_outline_blocks():
+    from core import brief_prompt_block, outline_prompt_block, normalize_outline
+    g = TravelBlogGenerator(Config())
+    style = {"name": "감성", "desc": "감성적"}
+    photos = [{"location_name": "연화의탕", "file_name": "a.jpg", "gps": {"lat": 33.3, "lon": 131.5}}]
+    bb = brief_prompt_block({"concept": "효도 {온천} 여행}", "avoid": "과장 {"})
+    ob = outline_prompt_block(normalize_outline(
+        {"intro_hook": "부모님 {첫} 온천", "sections": [{"place": "연화의탕", "gist": "아침 }{ 온천"}]},
+        ["연화의탕"]))
+    p = g._build_prompt(photos, "요약", "코스", "벳푸", "", "1일차", "제목", style, "", "",
+                        brief_block=bb, outline_block=ob)
+    assert "효도 {온천} 여행}" in p and "아침 }{ 온천" in p                 # 중괄호 사용자 텍스트 안전
+    assert p.index("[글 기획") < p.index("[방문 장소 목록")
+    assert p.index("[승인된 목차") < p.index("[방문 장소 목록")
+    p0 = g._build_prompt(photos, "요약", "코스", "벳푸", "", "1일차", "제목", style, "", "")
+    assert "[글 기획" not in p0 and "[승인된 목차" not in p0
+
+
+def _fake_gen_capture(monkeypatch, captured):
+    """generate_drafts 스모크와 같은 스텁 — 본문 프롬프트를 captured에 기록."""
+    import types, json as _json
+    g = TravelBlogGenerator(Config())
+    g.google_key = ""
+    def fake_create(**kwargs):
+        msgs = kwargs.get("messages", [])
+        sys_msg = msgs[0]["content"] if len(msgs) > 1 else ""
+        if sys_msg.startswith("정확한 지역 백과사전"):
+            content = _json.dumps({"intro": "소개", "specialties": [], "foods": [], "spots": []})
+        elif sys_msg.startswith("인기 여행 블로거"):
+            captured.append(msgs[-1]["content"])
+            content = _json.dumps({"title": "생성기가 지은 제목",
+                                   "content": '<h2 data-place="오타루 운하">오타루 운하</h2><p>운하</p>'})
+        else:
+            content = "오타루 운하: 운하 산책로."
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=content), finish_reason="stop")])
+    monkeypatch.setattr(g.client.chat.completions, "create", fake_create)
+    monkeypatch.setattr(TravelBlogGenerator, "_wiki_card_url", lambda self, *a, **k: None)
+    return g
+
+
+def test_generate_drafts_confirmed_title_skips_optimize(monkeypatch):
+    from core import normalize_outline
+    captured, calls = [], []
+    g = _fake_gen_capture(monkeypatch, captured)
+    monkeypatch.setattr(g, "optimize_title", lambda *a, **k: calls.append(1) or "최적화 제목")
+    photos = [_pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True, 43.19, 140.99)]
+    group = {"photos": photos, "label": "1일차", "course_line": ""}
+    ol = normalize_outline({"sections": [{"place": "오타루 운하", "gist": "밤 운하 {조명}"}],
+                            "title": "내가 정한 오타루 제목", "approved": True}, ["오타루 운하"])
+    dr = g.generate_drafts(group, "1일차", trip_title="", selected_structure="감성 후기형",
+                           brief={"concept": "혼자 걷는 겨울"}, outline=ol)
+    assert dr[0]["title"] == "내가 정한 오타루 제목"
+    assert dr[0]["original_title"] == "생성기가 지은 제목"
+    assert calls == []                                       # optimize_title 미호출
+    assert "[승인된 목차" in captured[-1] and "밤 운하 {조명}" in captured[-1]
+    assert "혼자 걷는 겨울" in captured[-1]
+    # 미승인 목차 → 목차 조각·확정 제목 둘 다 무시, optimize_title 호출
+    ol2 = dict(ol, approved=False)
+    dr2 = g.generate_drafts(group, "1일차", selected_structure="감성 후기형", outline=ol2)
+    assert calls == [1] and dr2[0]["title"] == "최적화 제목"
+    assert "[승인된 목차" not in captured[-1]
+
+
+def test_generate_outline_normalizes_and_rejects_length(monkeypatch):
+    import types, json as _json
+    g = TravelBlogGenerator(Config())
+    seen = {}
+    def fake(**k):
+        seen["kw"] = k
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=_json.dumps({
+                "title_candidates": ["벳푸 온천 1일차 코스", "느긋한 하루", "세번째", "네번째"],
+                "intro_hook": "부모님과",
+                "sections": [{"place": "이자카야", "gist": "저녁"}, {"place": "연화의탕", "gist": "아침"}],
+                "tips": ["예약"], "outro": "끝"})),
+            finish_reason="stop")])
+    monkeypatch.setattr(g.client.chat.completions, "create", fake)
+    group = {"label": "1일차", "photos": [{"location_name": "연화의탕"}, {"location_name": "이자카야"}],
+             "place_memos": {"연화의탕": "사건: 아침 입욕"}, "place_directives": {}}
+    ol = g.generate_outline(group, {"concept": "효도 여행"}, {"top_titles": ["벳푸 여행 코스"]}, "벳푸")
+    assert [s["place"] for s in ol["sections"]] == ["연화의탕", "이자카야"]    # 그룹 순서 강제
+    assert ol["sections"][0]["gist"] == "아침"
+    assert len(ol["title_candidates"]) == 3 and ol["title_candidates"][0]["has_keyword"]
+    assert ol["approved"] is False and ol["title"] == ""
+    assert ol["brief_used"]["concept"] == "효도 여행"
+    prompt = seen["kw"]["messages"][-1]["content"]
+    assert "1. 연화의탕 (사진 1장) — 사건: 아침 입욕" in prompt and "효도 여행" in prompt
+    assert seen["kw"]["response_format"] == {"type": "json_object"}
+    def cut(**k):
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content='{"title_candidates": ["잘'), finish_reason="length")])
+    monkeypatch.setattr(g.client.chat.completions, "create", cut)
+    assert g.generate_outline(group, None, None, "벳푸") is None              # 잘림 = 실패
+    def boom(**k):
+        raise RuntimeError("network")
+    monkeypatch.setattr(g.client.chat.completions, "create", boom)
+    assert g.generate_outline(group, None, None, "벳푸") is None
+    assert g.generate_outline({"photos": []}) is None

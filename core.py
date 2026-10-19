@@ -2321,9 +2321,12 @@ class TravelBlogGenerator:
     def generate_drafts(self, group, group_label, trip_title="",
                         naver_analysis=None, style_analysis=None,
                         selected_structure=None, route_modes=None,
-                        progress_cb=None):
+                        progress_cb=None, brief=None, outline=None):
         """
         하나의 그룹(일별/장소별/코스별)에 대해 3가지 초안 생성
+        brief: merge_brief 결과(여행 공통+일차 보충) — 있으면 [글 기획] 조각 주입
+        outline: 승인된 목차(approved=True일 때만 주입). outline.title이 있으면
+                 그 제목을 그대로 쓰고 optimize_title을 호출하지 않는다(사용자 확정 우선)
         route_modes: {"장소A→장소B": "transit", "장소B→장소C": "walking", ...}
         progress_cb: 진행 상황 콜백 함수 (문자열 메시지)
         """
@@ -2403,15 +2406,22 @@ class TravelBlogGenerator:
         place_memos = group.get("place_memos", {})
         place_directives = group.get("place_directives", {})
 
+        # 사람 참여 기획 — 사용자 텍스트는 조각 함수가 완성 문자열로 만든다(중괄호 안전)
+        brief_block = brief_prompt_block(brief)
+        approved = bool((outline or {}).get("approved"))
+        outline_block = outline_prompt_block(outline) if approved else ""
+        confirmed_title = ((outline or {}).get("title") or "").strip() if approved else ""
+
         drafts = []
         for si, s in enumerate(styles):
             _progress(f"⏳ {si+5}/6 초안 생성: {s['name']}...")
             logger.info(f"📝 초안 생성: {s['name']}...")
             prompt = self._build_prompt(
                 photos, photo_summary, course_line, region, region_desc,
-                group_label, trip_title, s, naver_ctx, style_ctx,
+                group_label, confirmed_title or trip_title, s, naver_ctx, style_ctx,
                 struct_ctx=struct_ctx, place_intros=place_intros,
                 place_memos=place_memos, place_directives=place_directives,
+                brief_block=brief_block, outline_block=outline_block,
             )
             post = self._call_ai(prompt, s["temp"], photos)
             if post:
@@ -2430,11 +2440,18 @@ class TravelBlogGenerator:
                 # 태그 확장(I5): 핵심 태그 + 지역×방문카테고리 조합 태그(결정적) → AI 태그로 채움
                 core_and_expand = self.extract_core_tags(naver_analysis, region) + self._expand_tags(region, place_types)
                 post["tags"] = self.merge_tags(post.get("tags"), core_and_expand, cap=25)
-                # 제목 최적화 (G6) — 실측 상위 제목 패턴 기반, 노출 관련은 코드가 강제
-                best_title = self.optimize_title(post, naver_analysis, region)
-                if best_title:
-                    post["original_title"] = post.get("title", "")
-                    post["title"] = best_title
+                if confirmed_title:
+                    # 목차에서 사용자가 확정한 제목 — 어떤 최적화도 덮지 않는다.
+                    # SEO 경고(seo_check)는 계속 계산해 사용자에게 보여준다.
+                    if post.get("title") and post["title"] != confirmed_title:
+                        post["original_title"] = post["title"]
+                    post["title"] = confirmed_title
+                else:
+                    # 제목 최적화 (G6) — 실측 상위 제목 패턴 기반, 노출 관련은 코드가 강제
+                    best_title = self.optimize_title(post, naver_analysis, region)
+                    if best_title:
+                        post["original_title"] = post.get("title", "")
+                        post["title"] = best_title
                 post["seo_warnings"] = self.seo_check(post, naver_analysis, region)
                 drafts.append(post)
             time.sleep(1)
@@ -2442,6 +2459,69 @@ class TravelBlogGenerator:
         logger.info(f"✅ {len(drafts)}개 초안 생성 완료")
         _progress(f"✅ {len(drafts)}개 초안 완료!")
         return drafts
+
+    def generate_outline(self, group, brief=None, naver_analysis=None, region=""):
+        """본문 쓰기 전 목차(제목 후보·인트로 훅·장소별 요지·꿀팁·아웃트로) 1회 호출.
+        사진 base64 없이 장소 목록+메모+브리프만 보낸다(소형 호출). 응답은
+        normalize_outline으로 그룹 장소 순서·이름에 강제 정규화.
+        실패(예외·JSON 오류·finish_reason=length) → None — 호출부가 error로 보고."""
+        names = group_place_names(group)
+        if not names:
+            return None
+        memos = (group or {}).get("place_memos") or {}
+        directives = (group or {}).get("place_directives") or {}
+        lines = []
+        for i, n in enumerate(names, 1):
+            cnt = sum(1 for p in group.get("photos", [])
+                      if (p.get("location_name") or "미확인") == n)
+            bits = []
+            if memos.get(n):
+                bits.append(str(memos[n]))
+            if directives.get(n):
+                bits.append("지시: " + str(directives[n]))
+            lines.append(f"{i}. {n} (사진 {cnt}장)" + (" — " + " / ".join(bits) if bits else ""))
+        region = (region or "").strip()
+        top = [t for t in ((naver_analysis or {}).get("top_titles") or []) if t][:8]
+        top_block = ("[참고 — 이 지역 네이버 상위 노출 제목]\n"
+                     + "\n".join(f"- {t}" for t in top) + "\n") if top else ""
+        kw_rule = f" '{region}'을(를) 반드시 포함." if region else ""
+        prompt = (
+            "여행 블로그 글 1편의 목차(설계)를 만들어라. 본문은 쓰지 말고 각 부분의 방향만 짧게.\n"
+            + brief_prompt_block(brief)
+            + f"\n[지역] {region or '(미상)'}\n[일정] {(group or {}).get('label', '')}\n"
+            + "[방문 장소 — 이 순서·이 이름 그대로 sections를 만들 것]\n"
+            + "\n".join(lines) + "\n" + top_block
+            + "[규칙]\n"
+            "1. sections는 위 장소마다 정확히 1개, 같은 순서. place는 위 이름을 글자 그대로 복사.\n"
+            "2. gist(섹션 요지)·emphasis(강조점)는 각 1문장. 메모·지시에 없는 사실(가격·시간)을 지어내지 말 것.\n"
+            "3. length는 짧게/보통/길게 중 하나.\n"
+            f"4. title_candidates는 서로 다른 제목 3개(15~45자).{kw_rule} 낚시·과장·이모지 금지.\n"
+            "5. tips는 사진·메모 근거가 있는 구체 팁 0~4개(일반론 금지). URL·HTML 금지.\n"
+            '[JSON만 응답] {"title_candidates":["..."],"intro_hook":"...",'
+            '"sections":[{"place":"...","gist":"...","emphasis":"...","length":"보통"}],'
+            '"tips":["..."],"outro":"..."}'
+        )
+        try:
+            r = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "system", "content": "여행 블로그 편집자. JSON만 응답."},
+                          {"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.3, max_tokens=2000,
+            )
+            choice = r.choices[0]
+            if getattr(choice, "finish_reason", "") == "length":
+                logger.warning("⚠️ 목차 응답이 길이 제한으로 잘림 — 실패 처리")
+                return None
+            raw = json.loads(choice.message.content or "")
+        except Exception as e:
+            logger.warning(f"⚠️ 목차 생성 실패: {e}")
+            return None
+        ol = normalize_outline(raw, names, keyword=region)
+        ol["title"] = ""
+        ol["approved"] = False
+        ol["brief_used"] = merge_brief(brief)
+        return ol
 
     def _search_place_intros(self, photos):
         """장소별 특징을 AI에게 물어서 3줄 소개 생성"""
@@ -2657,8 +2737,11 @@ class TravelBlogGenerator:
 
     def _build_prompt(self, photos, photo_summary, course_line, region,
                       region_desc, group_label, trip_title, style, naver_ctx, style_ctx,
-                      struct_ctx="", place_intros="", place_memos=None, place_directives=None):
-        """AI 프롬프트 생성 — 세련된 여행 블로그 디자인"""
+                      struct_ctx="", place_intros="", place_memos=None, place_directives=None,
+                      brief_block="", outline_block=""):
+        """AI 프롬프트 생성 — 세련된 여행 블로그 디자인.
+        brief_block/outline_block: brief_prompt_block/outline_prompt_block이 미리 만든
+        완성 문자열(사용자 텍스트 포함). 템플릿에는 변수로만 꽂는다 — { } 리터럴 추가 금지."""
         title_hint = trip_title or "사진 데이터를 보고 매력적인 제목 생성"
 
         # 구글맵/경로는 코드에서 자동 삽입 — AI에게 지시 불필요
@@ -2762,7 +2845,7 @@ class TravelBlogGenerator:
 [제목 힌트]: {title_hint}
 [제목 규칙]: 제목은 한글로, 지역+테마 중심. 확실하지 않은 추정 상호명(특히 영문)을 제목에 넣지 마세요.
 [코스]: {course_line}
-{naver_ctx}{style_ctx}{struct_ctx}{memo_ctx}{directive_ctx}{custom_style_ctx}
+{naver_ctx}{style_ctx}{struct_ctx}{memo_ctx}{directive_ctx}{custom_style_ctx}{brief_block}{outline_block}
 [방문 장소 목록 (시간순, 장소별 사진 수)]:
 {places_str}
 
