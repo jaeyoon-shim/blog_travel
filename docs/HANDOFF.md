@@ -4,7 +4,7 @@
 
 ## 무엇을 했나
 
-### 2026-10-19 — 사람 참여 기획·중간 보정 (브랜치 `feat/human-in-loop`, **미머지·미푸시**)
+### 2026-10-19 — 사람 참여 기획·중간 보정 (main 병합·`origin/web-edition` 푸시 완료 `37d2c8e`)
 계획서 `docs/superpowers/plans/2026-10-19-사람참여-기획-보정.md` Task 1~15 완료. 흐름: **브리프(여행/일차) → 목차 생성·승인(제목 확정) → 본문 → 섹션 보정(다시 쓰기·고정) → 블록 직접 편집 영속**. 상세는 `docs/WORKFLOW.md`의 "사람 참여 기획" 절(WORKFLOW는 이제 4단계 기준: 1 준비 2 계획 검수 3 원고 4 발행).
 - core: 브리프·목차·섹션 순수함수, `generate_outline`(JSON 모드), `revise_section`(KEEP 잠금, 잘림·토큰훼손·신규 URL 거부).
 - api: `/api/brief`, `/api/outline/<gi>`, `use_outline`, `/api/revise_section`, `/api/lock_section`, `PUT /api/blocks/<gi>/<di>`(`edited_blocks`), 재생성 시 고정 섹션 이식, 동시작업 409.
@@ -25,7 +25,7 @@
 ## 다음 단계
 
 1. **재생성한 일차의 실제 네이버 발행으로 `map_link` 검증** — 하이퍼링크가 OG 카드로 변하지 않고 텍스트 링크로 들어가는지(아직 미검증).
-2. **사용자 승인 후**: `feat/human-in-loop`를 main에 머지하고 `origin/web-edition`에 푸시(origin/main은 옛 별개 라인 — 건드리지 말 것).
+2. ~~main 병합·푸시~~ → 2026-10-19 완료(`37d2c8e`).
 3. 점검 문서 §4 "🟠 다음": 전역 작업 락(F4), 저장 경계 일원화(여행 제목·참고 URL), 공통 `api()` fetch 래퍼, 죽은 입력(모델 선택) 정리, 기존 평문 키 정리.
 4. 2일차형 과병합 한계(인접 두 장소), 백로그 G5/C/D, `core.py` God-class 리팩터.
 
