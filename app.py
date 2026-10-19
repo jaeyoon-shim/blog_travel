@@ -622,17 +622,21 @@ def _save_plan():
 
 
 def _save_drafts(gi):
-    """생성/재작성된 초안을 plan 폴더에 영구 저장 (서버 재시작 대비). 실패는 로그만."""
+    """생성/재작성된 초안을 plan 폴더에 영구 저장 (서버 재시작 대비).
+    성공 True / 실패·초안 없음 False — 기존 호출부는 무시해도 되고, 사용자 편집 저장
+    (PUT /api/blocks)은 False를 500으로 보고한다(실패를 성공으로 승격 금지)."""
     try:
         drafts = state["group_states"].get(gi, {}).get("drafts")
         if not drafts:
-            return
+            return False
         d = os.path.join(_plan_dir(), "drafts")
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, f"group_{gi}.json"), "w", encoding="utf-8") as f:
             json.dump(drafts, f, ensure_ascii=False)
+        return True
     except Exception as e:
         logger.warning(f"초안 저장 실패(무시): {e}")
+        return False
 
 
 def _load_saved_drafts(gi):
@@ -1443,12 +1447,37 @@ def api_blocks(gi, di):
     drafts = gs.get("drafts",[])
     if di >= len(drafts): return jsonify({"error":"잘못된 인덱스"}), 400
     d = drafts[di]
+    if d.get("edited_blocks"):
+        # 사용자가 블록을 직접 고쳐 저장한 결과가 진실원 — 발행·미리보기도 이것을 쓴다
+        return jsonify({"title": d.get("title", ""), "tags": d.get("tags", []),
+                        "blocks": d["edited_blocks"], "edited": True})
     groups = _active_groups()
     photos = groups[gi].get("photos", []) if gi < len(groups) else []
     if not photos:
         photos = d.get("photo_results", [])   # 서버 재시작 후 복원 경로(base64 이미지 매칭용)
     blocks = html_to_blocks(d.get("content",""), photos)
-    return jsonify({"title":d.get("title",""),"tags":d.get("tags",[]),"blocks":blocks})
+    return jsonify({"title":d.get("title",""),"tags":d.get("tags",[]),"blocks":blocks,
+                    "edited": False})
+
+
+@app.route('/api/blocks/<int:gi>/<int:di>', methods=['PUT'])
+def api_blocks_put(gi, di):
+    """블록 직접 편집 저장(디바운스) → post["edited_blocks"]. 제목도 함께 받는다.
+    자동저장이라 진행 중에도 막지 않는다(409로 막으면 사용자 편집이 조용히 유실)."""
+    data = request.json or {}
+    blocks = data.get("blocks")
+    if not isinstance(blocks, list):
+        return jsonify({"error": "blocks 배열 필요"}), 400
+    drafts = _drafts_for(gi)
+    if di >= len(drafts):
+        return jsonify({"error": "초안 없음"}), 400
+    drafts[di]["edited_blocks"] = blocks
+    title = data.get("title")
+    if isinstance(title, str) and title.strip():
+        drafts[di]["title"] = title.strip()
+    if not _save_drafts(gi):
+        return jsonify({"error": "저장 실패 — 디스크/권한을 확인하세요"}), 500
+    return jsonify({"ok": True, "saved": len(blocks)})
 
 
 # ── 미리보기 ──

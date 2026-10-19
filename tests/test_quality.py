@@ -2488,3 +2488,25 @@ def test_revise_clears_edited_blocks_and_keeps_locked(monkeypatch, tmp_path):
     assert "전체재작성2" in new["content"]
     assert "전체재작성1" not in new["content"]          # 고정 섹션(연화의탕)은 되붙임
     assert dict(split_sections(new["content"]))["연화의탕"] == dict(split_sections(_SEC_HTML))["연화의탕"]
+
+
+def test_blocks_put_then_get_returns_edited(monkeypatch, tmp_path):
+    app_mod = _outline_env(monkeypatch, tmp_path)
+    app_mod.state["group_states"] = {0: {"drafts": [
+        {"title": "원래 제목", "content": "<p>본문</p>", "tags": ["a"], "photo_results": []}]}}
+    c = app_mod.app.test_client()
+    g0 = c.get('/api/blocks/0/0').get_json()
+    assert g0["edited"] is False and g0["blocks"]
+    edited = [{"type": "text", "content": "내가 고친 {문단}"}, {"type": "separator"}]
+    r = c.put('/api/blocks/0/0', json={"blocks": edited, "title": "고친 제목"})
+    assert r.status_code == 200 and r.get_json()["saved"] == 2
+    # 재시작 시뮬레이션 — 파일에서 복원돼도 편집본이 나온다(발행·미리보기도 이것을 쓴다)
+    app_mod.state["group_states"] = {}
+    g1 = c.get('/api/blocks/0/0').get_json()
+    assert g1["edited"] is True and g1["blocks"] == edited and g1["title"] == "고친 제목"
+    assert c.get('/api/drafts/0').get_json()[0]["edited"] is True
+    assert c.put('/api/blocks/0/0', json={"blocks": "x"}).status_code == 400
+    assert c.put('/api/blocks/0/5', json={"blocks": []}).status_code == 400
+    # 디스크 저장 실패 → 500 (실패를 성공으로 승격 금지)
+    monkeypatch.setattr(app_mod, "_save_drafts", lambda gi: False)
+    assert c.put('/api/blocks/0/0', json={"blocks": edited}).status_code == 500
