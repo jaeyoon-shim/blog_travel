@@ -12,7 +12,8 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 
 from core import (Config, PhotoAnalyzer, TripStructurer, TravelBlogGenerator,
-                  LocalSaver, NaverBlogAnalyzer, StyleAnalyzer, logger)
+                  LocalSaver, NaverBlogAnalyzer, StyleAnalyzer, logger,
+                  TRIP_BRIEF_KEYS, normalize_brief, merge_brief)
 from posters import NaverPoster, TistoryPoster, html_to_blocks, summarize_publish_results
 
 app = Flask(__name__, static_folder='static')
@@ -74,6 +75,8 @@ state = {
     "progress": {"status": "idle", "message": "", "percent": 0},
     "settings": dict(DEFAULT_SETTINGS),
     "plan": None,
+    # 분석 전(=plan 없음)에 입력한 여행 공통 브리프 — /api/plan/draft가 plan으로 옮긴다
+    "pending_brief": None,
     "receipts": [],
     "published_gis": set(),
 }
@@ -644,7 +647,7 @@ def _load_saved_drafts(gi):
 
 
 _SESSION_KEYS = ["photo_paths", "photo_results", "naver_analysis",
-                 "style_analysis", "receipts"]
+                 "style_analysis", "receipts", "pending_brief"]
 
 
 def _save_project():
@@ -741,6 +744,7 @@ def api_projects_new():
     state.update({"photo_paths": [], "photo_results": [], "trip_structure": None,
                   "selected_groups": [], "group_states": {}, "naver_analysis": None,
                   "style_analysis": None, "plan": None, "receipts": [],
+                  "pending_brief": None,
                   "published_gis": set(), "completed": set(), "_plan_dir": None})
     # 새 프로젝트 폴더를 즉시 생성 — 셀렉터 목록에 바로 보이고 current로 등록
     # (안 만들면 "새 여행 추가가 안 된다"로 보임 + 셀렉터가 이전 여행을 표시해 혼란)
@@ -774,6 +778,10 @@ def api_plan_draft():
         TripPlanner.match_receipts_to_stops(state["plan"], state["receipts"])
     if _old_plan and _old_plan.get("days"):
         TripPlanner.merge_user_edits(state["plan"], _old_plan)
+    # 분석 전에 적어둔 여행 브리프를 새 plan으로 옮긴다(재초안이면 위 merge가 이미 보존)
+    if state.get("pending_brief") and not state["plan"].get("brief"):
+        state["plan"]["brief"] = dict(state["pending_brief"])
+    state["pending_brief"] = None
     _save_plan()
     # 새 계획 확정 = 새 원고 세션: 이전 여행의 초안·SEO 근거가 새 여행에 새어들지 않게 초기화
     # (오사카 테스트 후 도쿄 업로드 시 오사카 초안이 계속 나오던 혼입 버그)
@@ -797,6 +805,28 @@ def api_plan_post():
     state["plan"] = request.json or {}
     _save_plan()
     return jsonify({"ok": True})
+
+
+# ── 글 기획 브리프 (여행 공통) ──
+# plan이 있으면 plan["brief"], 없으면(분석 전) state["pending_brief"]에 둔다.
+# 둘 다 영속 훅을 탄다(_save_plan → project.json / _save_project) — 재시작 소실 방지.
+@app.route('/api/brief', methods=['GET'])
+def api_brief_get():
+    if state.get("plan"):
+        return jsonify({"brief": merge_brief(state["plan"].get("brief")), "source": "plan"})
+    return jsonify({"brief": merge_brief(state.get("pending_brief")), "source": "pending"})
+
+
+@app.route('/api/brief', methods=['POST'])
+def api_brief_post():
+    b = normalize_brief((request.json or {}).get("brief"), TRIP_BRIEF_KEYS)
+    if state.get("plan"):
+        state["plan"]["brief"] = b
+        _save_plan()
+        return jsonify({"ok": True, "source": "plan", "brief": b})
+    state["pending_brief"] = b
+    _save_project()
+    return jsonify({"ok": True, "source": "pending", "brief": b})
 
 
 def _find_stop(plan, stop_id):

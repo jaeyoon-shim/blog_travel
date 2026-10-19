@@ -1651,7 +1651,7 @@ class TripPlanner:
         for r in photo_results:
             by_pid[TripPlanner._photo_id(r.get("file_path", ""))] = r
         groups = []
-        for d in plan.get("days", []):
+        for day_index, d in enumerate(plan.get("days", [])):
             photos, memos, directives, meta, names = [], {}, {}, {}, []
             seen_names, prev_raw, prev_name = {}, None, None
             for s in d.get("stops", []):
@@ -1703,6 +1703,9 @@ class TripPlanner:
                 continue
             groups.append({
                 "group_id": d.get("day_no", len(groups) + 1),
+                # plan.days 인덱스 — 빈 일차는 그룹이 안 생겨 gi ≠ 일차 인덱스일 수
+                # 있다. 일차 브리프 조회는 반드시 이 값으로 한다.
+                "day_index": day_index,
                 "label": f"{d.get('day_no','')}일차",
                 "photos": photos,
                 "course_line": " → ".join(names),
@@ -1844,6 +1847,18 @@ class TripPlanner:
         photo_id 겹침이 가장 많은 구 stop을 매칭. 영수증은 제외(매칭이 별도 처리). 네트워크 X."""
         from collections import Counter
         old_stops = [s for d in (old_plan or {}).get("days", []) for s in d.get("stops", [])]
+        # 글 기획 브리프(여행 공통 + 일차 보충)는 사용자 확정이 진실원 — 재초안이
+        # 지우지 않는다. 일차는 날짜로 대응(날짜 없으면 순번).
+        if (old_plan or {}).get("brief") and not new_plan.get("brief"):
+            new_plan["brief"] = dict(old_plan["brief"])
+        old_day_brief = {}
+        for i, od in enumerate((old_plan or {}).get("days", [])):
+            if od.get("brief"):
+                old_day_brief[od.get("date") or f"#{i}"] = od["brief"]
+        for i, nd in enumerate(new_plan.get("days", [])):
+            b = old_day_brief.get(nd.get("date") or f"#{i}")
+            if b and not nd.get("brief"):
+                nd["brief"] = dict(b)
         pid_to_old = {}
         for i, s in enumerate(old_stops):
             for pid in s.get("photo_ids", []):

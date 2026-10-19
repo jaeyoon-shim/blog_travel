@@ -2048,3 +2048,71 @@ def test_splice_locked_preserves_and_skips():
     assert kept2 == [] and out2 == moved                                   # 사진 구성 바뀜 → 이식 안 함
     out3, kept3 = splice_locked(_SEC_HTML, new_html, [])
     assert out3 == new_html and kept3 == []
+
+
+def test_groups_from_plan_day_index_skips_empty_day():
+    ids = [TripPlanner._photo_id("u/%d.jpg" % i) for i in range(2)]
+    prs = [{"file_path": "u/%d.jpg" % i, "file_name": "%d.jpg" % i} for i in range(2)]
+    plan = {"days": [
+        {"day_no": 1, "date": "2026-06-21", "stops": []},                       # 빈 일차 → 그룹 없음
+        {"day_no": 2, "date": "2026-06-22", "stops": [{"name": "A", "photo_ids": [ids[0]]}]},
+        {"day_no": 3, "date": "2026-06-23", "stops": [{"name": "B", "photo_ids": [ids[1]]}]},
+    ]}
+    gs = TripPlanner.groups_from_plan(plan, prs)
+    assert [g["day_index"] for g in gs] == [1, 2]          # gi 0 ↔ plan.days[1]
+    assert [g["label"] for g in gs] == ["2일차", "3일차"]
+
+
+def test_merge_user_edits_keeps_brief():
+    photos = [_pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True),
+              _pr("u/c.jpg", "2026:06:23 09:00:00", "삿포로 TV타워", True)]
+    old = TripPlanner.build_draft(photos)
+    old["brief"] = {"concept": "효도 여행", "reader": "", "message": "느긋함",
+                    "must_include": "", "avoid": ""}
+    old["days"][1]["brief"] = {"message": "야경이 핵심", "must_include": "", "avoid": ""}
+    new = TripPlanner.build_draft(photos)
+    TripPlanner.merge_user_edits(new, old)
+    assert new["brief"]["concept"] == "효도 여행"
+    assert new["days"][1]["brief"]["message"] == "야경이 핵심"   # 날짜로 일차 대응
+    assert "brief" not in new["days"][0]
+
+
+def test_brief_pending_then_plan_draft(monkeypatch, tmp_path):
+    """분석 전 브리프 → pending(project.json 영속) → 계획 초안 시 plan으로 이동."""
+    import app as app_mod, json
+    monkeypatch.setattr(app_mod, "_plan_dir", lambda: str(tmp_path))
+    monkeypatch.setitem(app_mod.state, "_plan_dir", str(tmp_path))
+    monkeypatch.setitem(app_mod.state, "plan", None)
+    monkeypatch.setitem(app_mod.state, "pending_brief", None)
+    monkeypatch.setitem(app_mod.state, "group_states", {})
+    monkeypatch.setitem(app_mod.state, "naver_analysis", None)
+    monkeypatch.setitem(app_mod.state, "receipts", [])
+    monkeypatch.setitem(app_mod.state, "photo_results",
+                        [_pr("u/a.jpg", "2026:06:22 10:00:00", "오타루 운하", True)])
+    c = app_mod.app.test_client()
+    r = c.post('/api/brief', json={"brief": {"concept": "  효도 {온천} 여행 ", "bogus": "x"}})
+    assert r.status_code == 200 and r.get_json()["source"] == "pending"
+    assert app_mod.state["pending_brief"]["concept"] == "효도 {온천} 여행"
+    assert "bogus" not in app_mod.state["pending_brief"]
+    snap = json.loads((tmp_path / "project.json").read_text(encoding="utf-8"))
+    assert snap["pending_brief"]["concept"] == "효도 {온천} 여행"      # 재시작 대비 영속
+    assert c.get('/api/brief').get_json()["brief"]["concept"] == "효도 {온천} 여행"
+    r = c.post('/api/plan/draft', json={"overwrite": True})
+    assert r.status_code == 200
+    assert app_mod.state["plan"]["brief"]["concept"] == "효도 {온천} 여행"
+    assert app_mod.state["pending_brief"] is None
+    saved = json.loads((tmp_path / "plan.json").read_text(encoding="utf-8"))
+    assert saved["brief"]["concept"] == "효도 {온천} 여행"
+
+
+def test_brief_post_with_plan_writes_plan(monkeypatch, tmp_path):
+    import app as app_mod, json
+    monkeypatch.setattr(app_mod, "_plan_dir", lambda: str(tmp_path))
+    monkeypatch.setitem(app_mod.state, "_plan_dir", str(tmp_path))
+    monkeypatch.setitem(app_mod.state, "plan", {"trip_title": "", "days": []})
+    monkeypatch.setitem(app_mod.state, "pending_brief", None)
+    c = app_mod.app.test_client()
+    r = c.post('/api/brief', json={"brief": {"reader": "30대 부부"}})
+    assert r.get_json()["source"] == "plan"
+    assert json.loads((tmp_path / "plan.json").read_text(encoding="utf-8"))["brief"]["reader"] == "30대 부부"
+    assert app_mod.state["pending_brief"] is None
