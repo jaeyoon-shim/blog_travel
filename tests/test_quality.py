@@ -2335,3 +2335,69 @@ def test_generate_use_outline_passes_outline_and_brief(monkeypatch, tmp_path):
     c.post('/api/generate_all', json={})
     outs = [x[2] for x in app_mod.state["generator"].calls[-2:]]
     assert outs[0]["title"] == "확정 제목" and outs[1] is None
+
+
+def test_protect_section_locks_header_markers_captions():
+    chunk = (
+        '<div style="text-align:center;padding:30px 0 15px">\n<p>PLACE 1</p>\n'
+        '<h2 data-place="연화의탕">연화의탕</h2>\n<p>⭐ 4 / ¥1,000</p>\n</div>\n'
+        '<p>소개 문장</p>\n'
+        '<figure style="text-align:center;margin:24px 0" data-files="a.jpg"><img src="data:image/jpeg;base64,aHR0cDovL3g="/></figure>\n'
+        '<p style="text-align:center;margin:4px 0 20px;color:#999;font-size:.85em">📍 연화의탕</p>\n'
+        '<!--MAPLINK:https://www.google.com/maps/search/?api=1&query=1,2|🗺️ 연화의탕 위치 보기-->\n'
+        '<p>사진 감상</p>\n'
+    )
+    text, assets = TravelBlogGenerator._protect_section(chunk)
+    assert "<h2" not in text and "https://" not in text and "base64" not in text
+    assert "📍 연화의탕" not in text and "⭐" not in text
+    assert "소개 문장" in text and "사진 감상" in text
+    assert TravelBlogGenerator._restore_assets(text, assets) == chunk     # 무손실
+
+
+def _resp(content, finish="stop"):
+    import types
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(
+        message=types.SimpleNamespace(content=content), finish_reason=finish)])
+
+
+def test_revise_section_success_and_rejections(monkeypatch):
+    from core import split_sections, normalize_outline
+    g = TravelBlogGenerator(Config())
+    post = {"content": _SEC_HTML, "title": "제목", "region": "벳푸", "tags": [],
+            "edited_blocks": [{"type": "text", "content": "x"}]}
+    key = "이자카야"
+    text, _ = TravelBlogGenerator._protect_section(dict(split_sections(_SEC_HTML))[key])
+    seen = {}
+    def ok(**k):
+        seen["prompt"] = k["messages"][0]["content"]
+        return _resp(text.replace("소개2", "새로 쓴 소개2"))
+    monkeypatch.setattr(g.client.chat.completions, "create", ok)
+    ol = normalize_outline({"sections": [{"place": "이자카야", "gist": "저녁 한잔"}]},
+                           ["연화의탕", "이자카야", "연화의탕 (재방문)"])
+    new, why = g.revise_section(post, key, "더 생생하게", ol)
+    assert why == "" and "새로 쓴 소개2" in new["content"]
+    old_d, new_d = dict(split_sections(_SEC_HTML)), dict(split_sections(new["content"]))
+    for k in old_d:
+        if k != key:
+            assert new_d[k] == old_d[k]                 # 다른 섹션은 바이트 동일
+    assert new["edited_blocks"] is None and post["edited_blocks"]   # 원본 무변형
+    assert "저녁 한잔" in seen["prompt"] and "더 생생하게" in seen["prompt"]
+    assert "base64" not in seen["prompt"]                          # 자산은 토큰으로만
+    # 거부 4종 → (None, 사유), 원본 유지
+    cases = [
+        _resp(text.replace("소개2", "새 소개"), finish="length"),               # 잘림
+        _resp(text.replace("[KEEP_1]", "")),                                     # 토큰 결손
+        _resp(text + "[KEEP_1]"),                                                # 토큰 중복
+        _resp(text.replace("소개2", "https://evil.example 참고")),              # 신규 URL
+    ]
+    for resp in cases:
+        monkeypatch.setattr(g.client.chat.completions, "create", lambda _r=resp, **k: _r)
+        new2, why2 = g.revise_section(post, key, "고쳐줘")
+        assert new2 is None and why2
+    assert g.revise_section(post, "없는섹션", "고쳐줘") == (None, "해당 섹션을 찾을 수 없습니다")
+    assert g.revise_section(post, key, "  ")[0] is None
+    def boom(**k):
+        raise RuntimeError("net")
+    monkeypatch.setattr(g.client.chat.completions, "create", boom)
+    assert g.revise_section(post, key, "고쳐줘")[0] is None
+    assert post["content"] == _SEC_HTML

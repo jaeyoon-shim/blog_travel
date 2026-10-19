@@ -3243,6 +3243,100 @@ class TravelBlogGenerator:
             new_post, naver_analysis, (post or {}).get("region", ""))
         return new_post
 
+    # 섹션 재작성에서 추가로 잠그는 코드 조립물 — _find_asset_spans(사진 figure·
+    # 위키박스·경로카드)가 못 잡는 것들. 실데이터(plans/*/drafts) 전 섹션 왕복 검증.
+    _SECTION_EXTRA_ASSET_PATS = (
+        re.compile(r'<!--.*?-->', re.S),        # MAPCARD/MAPLINK 발행 마커(URL 포함)
+        # 장소 헤더 div(h2 data-place = 섹션 키 + 그 안의 별점·가격 줄) — 바뀌면 섹션이 사라진다
+        re.compile(r'<div style="text-align:center;padding:30px 0 15px">'
+                   r'(?:(?!</div>).)*?</h2>(?:(?!</div>).)*</div>', re.S),
+        re.compile(r'<p style="text-align:center;margin:4px 0 20px;color:#999;'
+                   r'font-size:\.85em">[^<]*</p>'),          # 사진 캡션(📍 장소명)
+        re.compile(r'<p>(?:⭐|[¥₩$])[^<]*</p>'),              # 별점·가격 줄(_format_meta_line)
+        re.compile(r'<p[^>]*>\s*🚶[^<]*</p>'),                # 코스 요약(_insert_course_summary)
+    )
+
+    @staticmethod
+    def _protect_section(content):
+        """섹션 HTML → ([KEEP_n] 토큰 텍스트, 자산 리스트). _protect_assets와 같은
+        토큰 규약(_restore_assets로 복원)이되, 마커·헤더·캡션·별점·코스요약까지 잠근다."""
+        content = content or ""
+        spans = list(TravelBlogGenerator._find_asset_spans(content))
+        for pat in TravelBlogGenerator._SECTION_EXTRA_ASSET_PATS:
+            spans += [(m.start(), m.end()) for m in pat.finditer(content)]
+        spans.sort()
+        merged = []
+        for s, e in spans:
+            if merged and s < merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+            else:
+                merged.append((s, e))
+        assets, out, prev = [], [], 0
+        for s, e in merged:
+            out.append(content[prev:s])
+            out.append(f"[KEEP_{len(assets) + 1}]")
+            assets.append(content[s:e])
+            prev = e
+        out.append(content[prev:])
+        return "".join(out), assets
+
+    def revise_section(self, post, key, instruction, outline=None, naver_analysis=None):
+        """초안의 한 섹션만 지시대로 재작성 → (new_post, "") 또는 (None, 사유).
+        실패 시 원본 post는 건드리지 않는다. 거부 조건: 섹션 없음 / AI 오류 /
+        finish_reason=="length"(잘림) / KEEP 토큰 결손·중복·미지 / 신규 https?:// 유입.
+        성공 시 본문이 바뀌므로 edited_blocks(블록 직접 편집)는 무효화(None)."""
+        instruction = (instruction or "").strip()
+        content = (post or {}).get("content") or ""
+        if not instruction:
+            return None, "지시가 비어 있습니다"
+        secs = dict(split_sections(content))
+        if key not in secs:
+            return None, "해당 섹션을 찾을 수 없습니다"
+        text, assets = self._protect_section(secs[key])
+        prompt = (
+            "아래는 여행 블로그 글의 한 섹션(HTML 조각)이다. 사용자 지시에 맞게 이 섹션의 문장만 다시 써라.\n"
+            "[규칙]\n"
+            "1. HTML 태그 구조와 style 속성은 유지하고 문장 내용만 바꾼다.\n"
+            "2. [KEEP_숫자] 토큰은 절대 추가/삭제/수정하지 않는다 — 원래 자리에 그대로 둔다.\n"
+            "3. URL·링크·이미지·지도·이동경로를 새로 넣지 않는다 (코드가 자동 삽입).\n"
+            "4. 다른 장소 이야기를 끌어오지 않는다. 확인할 수 없는 사실(가격·시간)을 지어내지 않는다.\n"
+            "5. 수정된 섹션 전체만 출력한다. 설명·코드펜스 금지.\n"
+            + outline_section_hint(outline, key)
+            + "\n[사용자 지시]\n" + instruction + "\n\n[섹션]\n" + text
+        )
+        try:
+            r = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5, max_tokens=self.max_tok,
+            )
+            choice = r.choices[0]
+            out = (choice.message.content or "").strip()
+        except Exception as e:
+            logger.warning(f"⚠️ 섹션 재작성 LLM 실패: {e}")
+            return None, "AI 호출 실패"
+        if getattr(choice, "finish_reason", "") == "length":
+            return None, "AI 응답이 길이 제한으로 잘렸습니다"
+        if out.startswith("```"):
+            out = re.sub(r'^```[a-zA-Z]*\n?', '', out)
+            out = re.sub(r'\n?```$', '', out).strip()
+        restored = self._restore_assets(out, assets)
+        if restored is None:
+            return None, "사진·지도·헤더 등 보호 요소가 훼손됐습니다"
+        if _url_count(out) > _url_count(text):
+            return None, "본문에 새 URL이 들어갔습니다(불변식 위반)"
+        # 섹션 끝 공백/개행은 원본 그대로 — 다음 섹션 헤더와 붙지 않게
+        tail_ws = secs[key][len(secs[key].rstrip()):]
+        new_content = replace_section(content, key, restored.rstrip() + tail_ws)
+        if new_content is None:
+            return None, "섹션 교체 실패"
+        new_post = dict(post)
+        new_post["content"] = self._number_places(new_content)
+        new_post["edited_blocks"] = None
+        new_post["seo_warnings"] = self.seo_check(
+            new_post, naver_analysis, (post or {}).get("region", ""))
+        return new_post, ""
+
     @staticmethod
     def _compose_collage(paths, out_dir=None):
         """같은 장소 사진 2장을 EXIF 방향 보정 후 가로로 이어붙여 콜라주 이미지 생성
